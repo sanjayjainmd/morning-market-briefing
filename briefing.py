@@ -144,9 +144,8 @@ def get_briefing_text() -> str:
             except anthropic.RateLimitError:
                 if attempt == 2:
                     raise
-                wait = 65 * (attempt + 1)
-                print(f"Rate limited. Waiting {wait}s before retry...")
-                time.sleep(wait)
+                print(f"Rate limited. Waiting 61s for rate limit window to reset...")
+                time.sleep(61)
 
         if response.stop_reason != "pause_turn":
             break
