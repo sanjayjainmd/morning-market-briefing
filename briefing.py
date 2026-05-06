@@ -133,7 +133,7 @@ def get_briefing_text() -> str:
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=8000,
-            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=messages,
         )
 
