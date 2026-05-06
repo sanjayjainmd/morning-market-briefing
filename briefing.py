@@ -2,12 +2,14 @@ import anthropic
 import os
 import smtplib
 import ssl
+import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
 from bs4 import BeautifulSoup
+from tavily import TavilyClient
 
 WATCHLIST = """
 AI Chips & Foundry: NVDA, AVGO, AMD, ARM, TSM, ASML, INTC
@@ -31,22 +33,19 @@ Steel & Metals: STLD, NUE, MTUS
 Water & Pipe Infrastructure: MWA, IIIN, NWPX, WMS, ROCK
 """
 
-SOURCES = [
-    ("Yahoo Finance Gainers", "https://finance.yahoo.com/markets/stocks/gainers/"),
-    ("Yahoo Finance Losers", "https://finance.yahoo.com/markets/stocks/losers/"),
-    ("Yahoo Finance Most Active", "https://finance.yahoo.com/markets/stocks/most-active/"),
-    ("SemiEngineering", "https://semiengineering.com"),
-    ("NextPlatform", "https://www.nextplatform.com"),
-    ("GazettaByte", "https://www.gazettabyte.com"),
-    ("World Nuclear News", "https://www.world-nuclear-news.org"),
-    ("Utility Dive", "https://www.utilitydive.com"),
-    ("Data Center Knowledge", "https://www.datacenterknowledge.com"),
-    ("Construction Dive", "https://www.constructiondive.com"),
-    ("EE Times", "https://www.eetimes.com"),
-    ("Reuters Technology", "https://www.reuters.com/technology/"),
+SEARCH_QUERIES = [
+    "stock market premarket movers biggest gainers losers today {today}",
+    "AI data center infrastructure hyperscaler capex investment news {today}",
+    "semiconductor chip AI GPU earnings announcement news {today}",
+    "optical photonics interconnect networking silicon news {today}",
+    "nuclear energy SMR small modular reactor power purchase agreement {today}",
+    "uranium nuclear fuel supply contract news {today}",
+    "data center construction electrical contractor award news {today}",
+    "power grid utility electricity demand AI data center news {today}",
+    "data center cooling HVAC power equipment news {today}",
 ]
 
-HEADERS = {
+YAHOO_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -55,47 +54,71 @@ HEADERS = {
 }
 
 
-def fetch_text(url: str, max_chars: int = 3000) -> str:
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-            tag.decompose()
-        lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if len(l.strip()) > 25]
-        return "\n".join(lines)[:max_chars]
-    except Exception as e:
-        return f"[Could not fetch: {e}]"
+def fetch_yahoo_movers() -> str:
+    urls = [
+        ("Gainers", "https://finance.yahoo.com/markets/stocks/gainers/"),
+        ("Losers", "https://finance.yahoo.com/markets/stocks/losers/"),
+        ("Most Active", "https://finance.yahoo.com/markets/stocks/most-active/"),
+    ]
+    parts = []
+    for label, url in urls:
+        try:
+            resp = requests.get(url, headers=YAHOO_HEADERS, timeout=15)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer"]):
+                tag.decompose()
+            lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if len(l.strip()) > 10]
+            parts.append(f"=== Yahoo Finance {label} ===\n" + "\n".join(lines)[:3000])
+        except Exception as e:
+            parts.append(f"=== Yahoo Finance {label} ===\n[Could not fetch: {e}]")
+    return "\n\n".join(parts)
 
 
-def gather_content() -> str:
+def run_searches(today: str) -> str:
+    tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
     sections = []
-    for name, url in SOURCES:
-        print(f"  Fetching {name}...")
-        text = fetch_text(url)
-        sections.append(f"=== {name} ===\n{text}")
+
+    for query_template in SEARCH_QUERIES:
+        query = query_template.format(today=today)
+        print(f"  Searching: {query[:60]}...")
+        try:
+            results = tavily.search(
+                query=query,
+                max_results=5,
+                search_depth="basic",
+            )
+            snippets = []
+            for r in results.get("results", []):
+                snippets.append(f"- [{r['title']}]({r['url']})\n  {r.get('content', '')[:400]}")
+            sections.append(f"=== Search: {query} ===\n" + "\n".join(snippets))
+        except Exception as e:
+            sections.append(f"=== Search: {query} ===\n[Search failed: {e}]")
+
     return "\n\n".join(sections)
 
 
-def build_prompt(today: str, day_of_week: str, content: str) -> str:
+def build_prompt(today: str, day_of_week: str, yahoo_content: str, search_content: str) -> str:
     return f"""Today is {day_of_week}, {today}. You are a market research assistant for an investor focused on AI infrastructure, optical/photonics, semiconductors, data center construction, power equipment, nuclear energy, and utilities.
 
 ## STOCK WATCHLIST
 {WATCHLIST}
 
-## FETCHED CONTENT FROM NEWS SOURCES AND YAHOO FINANCE
-{content}
+## YAHOO FINANCE — PRICE MOVERS
+{yahoo_content}
+
+## WEB SEARCH RESULTS
+{search_content}
 
 ## YOUR TASK
-Analyze the fetched content above and produce a morning market briefing.
+Analyze the content above and produce a morning market briefing.
 
-1. PRICE MOVERS: From the Yahoo Finance data, identify any watchlist stocks with 5%+ moves. Note ticker, % change, price, and reason if available.
+1. PRICE MOVERS: From Yahoo Finance, identify watchlist stocks with 5%+ moves. Note ticker, % change, price, and reason.
 
-2. NEWS ANALYSIS: For each relevant story, identify:
+2. NEWS ANALYSIS: For each relevant story from the search results:
    - Direct impact: which watchlist stocks are explicitly named?
    - Indirect impact: which benefit/suffer even if not named?
-     (e.g. TSMC capacity news → NVMI, CAMT, ICHR | Hyperscaler capex cut → COHR, LITE, MRVL bearish | Nuclear PPA → CEG, CCJ, LEU bullish | Data center contract → PWR, EME, IESC bullish)
-   - Urgency: actionable Today / This Week / Background context
+     (e.g. TSMC capacity → NVMI, CAMT, ICHR | Hyperscaler capex cut → COHR, LITE, MRVL bearish | Nuclear PPA → CEG, CCJ, LEU bullish | Data center contract → PWR, EME, IESC bullish | SMR order → BWXT, SMR, OKLO bullish)
+   - Urgency: Today / This Week / Background
    - Sentiment: Bullish / Bearish / Neutral per stock
 
 ## OUTPUT FORMAT
@@ -121,7 +144,7 @@ SECTORS WITH NO NEWS TODAY
 
 ---
 
-Quality rules: be honest if nothing meaningful — do not pad. Only use content from the fetched data above. Make the analyst connections a human would make, not just keyword matches."""
+Quality rules: be honest if nothing meaningful — do not pad. 3 real insights beat 10 irrelevant headlines. Make the connections a human analyst would make, not just keyword matches."""
 
 
 def get_briefing_text() -> str:
@@ -129,17 +152,28 @@ def get_briefing_text() -> str:
     today = datetime.now().strftime("%B %d, %Y")
     day_of_week = datetime.now().strftime("%A")
 
-    print("Fetching news sources...")
-    content = gather_content()
+    print("Fetching Yahoo Finance price movers...")
+    yahoo_content = fetch_yahoo_movers()
 
-    prompt = build_prompt(today, day_of_week, content)
+    print("Running targeted news searches...")
+    search_content = run_searches(today)
 
     print("Sending to Claude for analysis...")
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8000,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
+
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=8000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except anthropic.RateLimitError:
+            if attempt == 2:
+                raise
+            print(f"Rate limited. Waiting 61s...")
+            time.sleep(61)
 
     text = "\n".join(
         block.text for block in response.content if block.type == "text"
