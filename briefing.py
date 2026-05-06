@@ -55,20 +55,39 @@ YAHOO_HEADERS = {
 
 
 def fetch_yahoo_movers() -> str:
-    urls = [
-        ("Gainers", "https://finance.yahoo.com/markets/stocks/gainers/"),
-        ("Losers", "https://finance.yahoo.com/markets/stocks/losers/"),
-        ("Most Active", "https://finance.yahoo.com/markets/stocks/most-active/"),
+    screens = [
+        ("Gainers", "day_gainers"),
+        ("Losers", "day_losers"),
+        ("Most Active", "most_actives"),
     ]
+    api_headers = {
+        "User-Agent": YAHOO_HEADERS["User-Agent"],
+        "Accept": "application/json",
+    }
     parts = []
-    for label, url in urls:
+    for label, scr_id in screens:
         try:
-            resp = requests.get(url, headers=YAHOO_HEADERS, timeout=15)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if len(l.strip()) > 10]
-            parts.append(f"=== Yahoo Finance {label} ===\n" + "\n".join(lines)[:1500])
+            url = (
+                f"https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+                f"?scrIds={scr_id}&count=25&formatted=false"
+            )
+            resp = requests.get(url, headers=api_headers, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            quotes = (
+                data.get("finance", {})
+                    .get("result", [{}])[0]
+                    .get("quotes", [])
+            )
+            lines = []
+            for q in quotes:
+                ticker = q.get("symbol", "")
+                price = q.get("regularMarketPrice", "")
+                pct = q.get("regularMarketChangePercent", 0)
+                name = q.get("shortName", "")
+                volume = q.get("regularMarketVolume", "")
+                lines.append(f"{ticker} ({name}): {pct:+.1f}% | ${price} | Vol: {volume:,}")
+            parts.append(f"=== Yahoo Finance {label} ===\n" + "\n".join(lines))
         except Exception as e:
             parts.append(f"=== Yahoo Finance {label} ===\n[Could not fetch: {e}]")
     return "\n\n".join(parts)
