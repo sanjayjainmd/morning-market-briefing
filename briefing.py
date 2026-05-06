@@ -68,7 +68,7 @@ def fetch_yahoo_movers() -> str:
             for tag in soup(["script", "style", "nav", "footer"]):
                 tag.decompose()
             lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if len(l.strip()) > 10]
-            parts.append(f"=== Yahoo Finance {label} ===\n" + "\n".join(lines)[:3000])
+            parts.append(f"=== Yahoo Finance {label} ===\n" + "\n".join(lines)[:1500])
         except Exception as e:
             parts.append(f"=== Yahoo Finance {label} ===\n[Could not fetch: {e}]")
     return "\n\n".join(parts)
@@ -84,12 +84,12 @@ def run_searches(today: str) -> str:
         try:
             results = tavily.search(
                 query=query,
-                max_results=5,
+                max_results=3,
                 search_depth="basic",
             )
             snippets = []
             for r in results.get("results", []):
-                snippets.append(f"- [{r['title']}]({r['url']})\n  {r.get('content', '')[:400]}")
+                snippets.append(f"- [{r['title']}]({r['url']})\n  {r.get('content', '')[:200]}")
             sections.append(f"=== Search: {query} ===\n" + "\n".join(snippets))
         except Exception as e:
             sections.append(f"=== Search: {query} ===\n[Search failed: {e}]")
@@ -160,11 +160,19 @@ def get_briefing_text() -> str:
 
     print("Sending to Claude for analysis...")
     prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
+    estimated_tokens = len(prompt) // 4
+    print(f"  Prompt size: {len(prompt):,} chars (~{estimated_tokens:,} tokens)")
+    if estimated_tokens > 25000:
+        # Truncate search content to fit within safe limit
+        max_content = 25000 * 4 - len(prompt) + len(search_content)
+        search_content = search_content[:max_content]
+        prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
+        print(f"  Trimmed to: {len(prompt):,} chars (~{len(prompt)//4:,} tokens)")
 
     for attempt in range(3):
         try:
             response = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5",
                 max_tokens=8000,
                 messages=[{"role": "user", "content": prompt}],
             )
