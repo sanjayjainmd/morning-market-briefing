@@ -35,14 +35,15 @@ Water & Pipe Infrastructure: MWA, IIIN, NWPX, WMS, ROCK
 
 SEARCH_QUERIES = [
     "stock market premarket movers biggest gainers losers today {today}",
-    "AI data center infrastructure hyperscaler capex investment news {today}",
-    "semiconductor chip AI GPU earnings announcement news {today}",
-    "optical photonics interconnect networking silicon news {today}",
-    "nuclear energy SMR small modular reactor power purchase agreement {today}",
-    "uranium nuclear fuel supply contract news {today}",
-    "data center construction electrical contractor award news {today}",
-    "power grid utility electricity demand AI data center news {today}",
-    "data center cooling HVAC power equipment news {today}",
+    "earnings report beat miss guidance data center AI infrastructure {today}",
+    "NVDA AVGO AMD ARM TSM ASML INTC earnings news analyst {today}",
+    "COHR LITE MRVL ANET CRDO optical interconnect semiconductor news {today}",
+    "PWR EME IESC STRL PRIM data center construction contractor earnings {today}",
+    "AI data center hyperscaler capex spending Microsoft Google Amazon Meta {today}",
+    "nuclear energy SMR small modular reactor power purchase agreement CEG VST {today}",
+    "uranium CCJ LEU nuclear fuel supply contract news {today}",
+    "power grid GEV POWL AZZ utility electricity demand AI {today}",
+    "semiconductor metrology equipment NVMI CAMT ONTO FORM AEIS news {today}",
 ]
 
 YAHOO_HEADERS = {
@@ -108,7 +109,7 @@ def run_searches(today: str) -> str:
             )
             snippets = []
             for r in results.get("results", []):
-                snippets.append(f"- [{r['title']}]({r['url']})\n  {r.get('content', '')[:200]}")
+                snippets.append(f"- [{r['title']}]({r['url']})\n  {r.get('content', '')[:500]}")
             sections.append(f"=== Search: {query} ===\n" + "\n".join(snippets))
         except Exception as e:
             sections.append(f"=== Search: {query} ===\n[Search failed: {e}]")
@@ -131,13 +132,26 @@ def build_prompt(today: str, day_of_week: str, yahoo_content: str, search_conten
 ## YOUR TASK
 Analyze the content above and produce a morning market briefing.
 
-1. PRICE MOVERS: From Yahoo Finance, identify watchlist stocks with 5%+ moves. Note ticker, % change, price, and reason.
+1. PRICE MOVERS: From Yahoo Finance, identify any watchlist stocks with 5%+ moves. For each, find the reason from the search results (earnings beat/miss, guidance change, deal announcement, etc.).
 
-2. NEWS ANALYSIS: For each relevant story from the search results:
+2. EARNINGS ANALYSIS: For any watchlist company with recent earnings, extract:
+   - Exact revenue, EPS vs consensus
+   - Guidance raised/lowered/maintained
+   - Key segment performance (e.g. data center revenue, AI revenue)
+   - Whether the stock reaction seems justified or overdone
+
+3. NEWS ANALYSIS: For each relevant story:
    - Direct impact: which watchlist stocks are explicitly named?
    - Indirect impact: which benefit/suffer even if not named?
-     (e.g. TSMC capacity → NVMI, CAMT, ICHR | Hyperscaler capex cut → COHR, LITE, MRVL bearish | Nuclear PPA → CEG, CCJ, LEU bullish | Data center contract → PWR, EME, IESC bullish | SMR order → BWXT, SMR, OKLO bullish)
-   - Urgency: Today / This Week / Background
+     TSMC/Intel foundry news → NVMI, CAMT, ICHR bullish
+     Hyperscaler capex increase → COHR, LITE, MRVL, SMCI, VRT bullish
+     Hyperscaler capex cut → COHR, LITE, MRVL bearish
+     Data center construction win → PWR, EME, IESC, STRL bullish (check peers for sympathy moves)
+     Nuclear PPA signed → CEG, VST, CCJ, LEU bullish
+     SMR order/deal → BWXT, SMR, OKLO bullish
+     Power equipment shortage → POWL, AZZ, GEV bullish
+   - Thesis check: does this strengthen or weaken the investment thesis?
+   - Urgency: Today (act now) / This Week (monitor) / Background (context)
    - Sentiment: Bullish / Bearish / Neutral per stock
 
 ## OUTPUT FORMAT
@@ -148,22 +162,33 @@ AI Infrastructure | Optical | Semiconductors | Nuclear | Power | Data Centers
 
 PRICE ALERTS — 5%+ MOVERS
 [List watchlist stocks with 5%+ move, or "No watchlist stocks with 5%+ move this morning."]
-- TICKER: +X% | $XX.XX | Reason: [headline]
+- TICKER: +X% | $XX.XX | Reason: [one line]
 
 ---
 
 HIGH IMPACT — Act or Monitor Closely
-[For each story: 2-3 sentence summary, then Stock | Bullish/Bearish/Neutral | Why, then Urgency]
+For each story:
+- Headline and 2-3 sentence summary with specific numbers (revenue, EPS, % beats)
+- Stock | Bullish/Bearish/Neutral | Why (one sentence each)
+- Urgency: Today / This Week / Background
 
 MEDIUM IMPACT — Worth Knowing
+[Same format, less urgent]
 
 LOW IMPACT / BACKGROUND
+[Thematic context only]
 
 SECTORS WITH NO NEWS TODAY
+[List sectors checked with no relevant news]
 
 ---
 
-Quality rules: be honest if nothing meaningful — do not pad. 3 real insights beat 10 irrelevant headlines. Make the connections a human analyst would make, not just keyword matches."""
+Quality rules:
+- Include specific numbers — revenue figures, EPS beats, guidance ranges
+- For earnings beats: note if peer stocks should see sympathy moves (check if they haven't caught up yet)
+- For sell-offs on good earnings: explicitly assess if the reaction is overdone
+- Be honest if nothing meaningful — do not pad
+- Only today's and this week's news — do not summarize old articles"""
 
 
 def get_briefing_text() -> str:
@@ -191,7 +216,7 @@ def get_briefing_text() -> str:
     for attempt in range(3):
         try:
             response = client.messages.create(
-                model="claude-haiku-4-5",
+                model="claude-sonnet-4-6",
                 max_tokens=8000,
                 messages=[{"role": "user", "content": prompt}],
             )
