@@ -2,6 +2,7 @@ import anthropic
 import os
 import smtplib
 import ssl
+import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -130,12 +131,22 @@ def get_briefing_text() -> str:
     response = None
 
     for _ in range(max_continuations):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8000,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=messages,
-        )
+        # Retry up to 3 times on rate limit errors, waiting 65s between attempts
+        for attempt in range(3):
+            try:
+                response = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=8000,
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    messages=messages,
+                )
+                break
+            except anthropic.RateLimitError:
+                if attempt == 2:
+                    raise
+                wait = 65 * (attempt + 1)
+                print(f"Rate limited. Waiting {wait}s before retry...")
+                time.sleep(wait)
 
         if response.stop_reason != "pause_turn":
             break
