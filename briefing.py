@@ -2,10 +2,12 @@ import anthropic
 import os
 import smtplib
 import ssl
-import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import requests
+from bs4 import BeautifulSoup
 
 WATCHLIST = """
 AI Chips & Foundry: NVDA, AVGO, AMD, ARM, TSM, ASML, INTC
@@ -29,58 +31,74 @@ Steel & Metals: STLD, NUE, MTUS
 Water & Pipe Infrastructure: MWA, IIIN, NWPX, WMS, ROCK
 """
 
+SOURCES = [
+    ("Yahoo Finance Gainers", "https://finance.yahoo.com/markets/stocks/gainers/"),
+    ("Yahoo Finance Losers", "https://finance.yahoo.com/markets/stocks/losers/"),
+    ("Yahoo Finance Most Active", "https://finance.yahoo.com/markets/stocks/most-active/"),
+    ("SemiEngineering", "https://semiengineering.com"),
+    ("NextPlatform", "https://www.nextplatform.com"),
+    ("GazettaByte", "https://www.gazettabyte.com"),
+    ("World Nuclear News", "https://www.world-nuclear-news.org"),
+    ("Utility Dive", "https://www.utilitydive.com"),
+    ("Data Center Knowledge", "https://www.datacenterknowledge.com"),
+    ("Construction Dive", "https://www.constructiondive.com"),
+    ("EE Times", "https://www.eetimes.com"),
+    ("Reuters Technology", "https://www.reuters.com/technology/"),
+]
 
-def build_prompt(today: str, day_of_week: str) -> str:
-    return f"""Today is {day_of_week}, {today}. You are an intelligent market research assistant for an investor focused on AI infrastructure, optical/photonics, semiconductors, data center construction, power equipment, nuclear energy, and utilities.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
 
-## YOUR OBJECTIVE
-Produce a morning market briefing covering:
-1. Any 5%+ price moves on watchlist stocks today
-2. Relevant news from key sources with intelligent stock impact analysis
 
-## COMPLETE STOCK WATCHLIST
+def fetch_text(url: str, max_chars: int = 3000) -> str:
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        lines = [l.strip() for l in soup.get_text(separator="\n").splitlines() if len(l.strip()) > 25]
+        return "\n".join(lines)[:max_chars]
+    except Exception as e:
+        return f"[Could not fetch: {e}]"
+
+
+def gather_content() -> str:
+    sections = []
+    for name, url in SOURCES:
+        print(f"  Fetching {name}...")
+        text = fetch_text(url)
+        sections.append(f"=== {name} ===\n{text}")
+    return "\n\n".join(sections)
+
+
+def build_prompt(today: str, day_of_week: str, content: str) -> str:
+    return f"""Today is {day_of_week}, {today}. You are a market research assistant for an investor focused on AI infrastructure, optical/photonics, semiconductors, data center construction, power equipment, nuclear energy, and utilities.
+
+## STOCK WATCHLIST
 {WATCHLIST}
 
-## STEP 1 — SCAN FOR PRICE MOVERS
-Use web search to find:
-- "stock market premarket movers today {today}"
-- "biggest stock gainers losers today {today}"
-- Fetch https://finance.yahoo.com/markets/stocks/gainers/ and https://finance.yahoo.com/markets/stocks/losers/
+## FETCHED CONTENT FROM NEWS SOURCES AND YAHOO FINANCE
+{content}
 
-Cross-reference every stock against the watchlist above. For any watchlist stock with a 5%+ move: note ticker, price, % change, and reason.
+## YOUR TASK
+Analyze the fetched content above and produce a morning market briefing.
 
-## STEP 2 — FETCH NEWS FROM THESE SOURCES
-Search for recent articles from each of these:
-- semiengineering.com — AI chips, packaging, metrology
-- nextplatform.com — HPC, data center, AI infrastructure
-- gazettabyte.com — optical, photonics, interconnect
-- world-nuclear-news.org — nuclear, SMRs, uranium
-- utilitydive.com — power grid, utilities, PPAs
-- datacenterknowledge.com — data center deals and construction
-- constructiondive.com — data center construction, contractors
-- eetimes.com — semiconductors, chip industry
-- Reuters technology, CNBC technology
+1. PRICE MOVERS: From the Yahoo Finance data, identify any watchlist stocks with 5%+ moves. Note ticker, % change, price, and reason if available.
 
-Also run these searches:
-- "AI data center infrastructure news today {today}"
-- "nuclear energy SMR deal news today {today}"
-- "semiconductor optical interconnect earnings {today}"
-- "data center construction power grid news {today}"
+2. NEWS ANALYSIS: For each relevant story, identify:
+   - Direct impact: which watchlist stocks are explicitly named?
+   - Indirect impact: which benefit/suffer even if not named?
+     (e.g. TSMC capacity news → NVMI, CAMT, ICHR | Hyperscaler capex cut → COHR, LITE, MRVL bearish | Nuclear PPA → CEG, CCJ, LEU bullish | Data center contract → PWR, EME, IESC bullish)
+   - Urgency: actionable Today / This Week / Background context
+   - Sentiment: Bullish / Bearish / Neutral per stock
 
-## STEP 3 — INTELLIGENT ANALYSIS
-For each relevant development:
-1. Direct impact — which watchlist stocks are explicitly named?
-2. Indirect impact — which benefit/suffer even if not named?
-   Examples: TSMC capacity → NVMI, CAMT, ICHR | Hyperscaler capex cut → COHR, LITE, MRVL bearish |
-   Nuclear PPA → CEG, CCJ, LEU bullish | SMR order → BWXT, SMR, OKLO bullish |
-   Data center contract → PWR, EME, IESC bullish | Equipment shortage → POWL, AZZ, GEV bullish
-3. Thesis check — does this strengthen or weaken the investment thesis?
-4. Urgency — actionable today, this week, or background context?
-5. Sentiment — Bullish / Bearish / Neutral per stock
-
-## STEP 4 — FORMAT THE REPORT
-
-Use this exact format:
+## OUTPUT FORMAT
 
 ---
 MORNING MARKET BRIEFING — {today} | 10 AM ET
@@ -93,29 +111,17 @@ PRICE ALERTS — 5%+ MOVERS
 ---
 
 HIGH IMPACT — Act or Monitor Closely
-[Direct, immediate stock impact]
-
-For each story:
-- 2-3 sentence summary of what happened
-- Stock | Impact (Bullish / Bearish / Neutral) | Why (one sentence)
-- Urgency: Today / This Week / Background
+[For each story: 2-3 sentence summary, then Stock | Bullish/Bearish/Neutral | Why, then Urgency]
 
 MEDIUM IMPACT — Worth Knowing
-[Relevant to thesis but not immediately actionable]
 
 LOW IMPACT / BACKGROUND
-[Thematic context, no immediate action needed]
 
 SECTORS WITH NO NEWS TODAY
-[Confirm which sectors had no relevant news]
 
 ---
 
-Quality rules:
-- Be honest if nothing meaningful — do not pad
-- 3 real insights beat 10 irrelevant headlines
-- Only today's news — do not summarize old articles
-- Make the connections a human analyst would make, not just keyword matches"""
+Quality rules: be honest if nothing meaningful — do not pad. Only use content from the fetched data above. Make the analyst connections a human would make, not just keyword matches."""
 
 
 def get_briefing_text() -> str:
@@ -123,41 +129,17 @@ def get_briefing_text() -> str:
     today = datetime.now().strftime("%B %d, %Y")
     day_of_week = datetime.now().strftime("%A")
 
-    prompt = build_prompt(today, day_of_week)
-    messages = [{"role": "user", "content": prompt}]
+    print("Fetching news sources...")
+    content = gather_content()
 
-    # Loop handles pause_turn (fires when server-side tool hits its 10-iteration limit)
-    max_continuations = 5
-    response = None
+    prompt = build_prompt(today, day_of_week, content)
 
-    for _ in range(max_continuations):
-        # Retry up to 3 times on rate limit errors, waiting 65s between attempts
-        for attempt in range(3):
-            try:
-                response = client.messages.create(
-                    model="claude-haiku-4-5",
-                    max_tokens=8000,
-                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                    messages=messages,
-                )
-                break
-            except anthropic.RateLimitError:
-                if attempt == 2:
-                    raise
-                print(f"Rate limited. Waiting 61s for rate limit window to reset...")
-                time.sleep(61)
-
-        if response.stop_reason != "pause_turn":
-            break
-
-        # Re-send with assistant response appended so the server resumes
-        messages = [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": response.content},
-        ]
-
-    if response is None:
-        raise RuntimeError("No response received")
+    print("Sending to Claude for analysis...")
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8000,
+        messages=[{"role": "user", "content": prompt}],
+    )
 
     text = "\n".join(
         block.text for block in response.content if block.type == "text"
