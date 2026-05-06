@@ -135,7 +135,7 @@ def get_briefing_text() -> str:
         for attempt in range(3):
             try:
                 response = client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model="claude-haiku-4-5",
                     max_tokens=8000,
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                     messages=messages,
