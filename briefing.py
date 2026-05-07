@@ -213,7 +213,7 @@ def get_briefing_text() -> str:
         prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
         print(f"  Trimmed to: {len(prompt):,} chars (~{len(prompt)//4:,} tokens)")
 
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-6",
@@ -221,11 +221,12 @@ def get_briefing_text() -> str:
                 messages=[{"role": "user", "content": prompt}],
             )
             break
-        except anthropic.RateLimitError:
-            if attempt == 2:
+        except (anthropic.RateLimitError, anthropic.OverloadedError) as e:
+            if attempt == 4:
                 raise
-            print(f"Rate limited. Waiting 61s...")
-            time.sleep(61)
+            wait = 60 * (attempt + 1)
+            print(f"API unavailable ({type(e).__name__}). Waiting {wait}s (attempt {attempt + 1}/5)...")
+            time.sleep(wait)
 
     text = "\n".join(
         block.text for block in response.content if block.type == "text"
