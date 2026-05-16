@@ -2,8 +2,8 @@ name: Morning Market Briefing
 
 on:
   schedule:
-    # 10:09 AM EDT (UTC-4) = 14:09 UTC, Mon-Fri
-    - cron: "9 14 * * 1-5"
+    # 10:09 AM EDT (UTC-4) = 14:09 UTC, Tue & Fri only
+    - cron: "9 14 * * 2,5"
   workflow_dispatch:
 
 jobs:
