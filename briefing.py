@@ -7,8 +7,8 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import markdown
 import requests
-from bs4 import BeautifulSoup
 from tavily import TavilyClient
 
 WATCHLIST = """
@@ -53,6 +53,85 @@ YAHOO_HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     )
 }
+
+
+def parse_watchlist_tickers() -> list[str]:
+    """Extract all unique tickers from the WATCHLIST sections."""
+    tickers = []
+    for line in WATCHLIST.strip().splitlines():
+        if ":" not in line:
+            continue
+        _, names = line.split(":", 1)
+        for t in names.split(","):
+            t = t.strip().upper()
+            if t and t not in tickers:
+                tickers.append(t)
+    return tickers
+
+
+def _yahoo_crumb_session() -> tuple[requests.Session, str | None]:
+    """Establish a Yahoo session with cookie + crumb for the quote API."""
+    s = requests.Session()
+    s.headers.update(YAHOO_HEADERS)
+    try:
+        s.get("https://fc.yahoo.com", timeout=10)
+        r = s.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=10)
+        crumb = r.text.strip()
+        return s, (crumb or None)
+    except Exception:
+        return s, None
+
+
+def fetch_watchlist_quotes(tickers: list[str]) -> tuple[str, str]:
+    """Fetch live quotes for the watchlist and return (movers_section, all_quotes_section).
+
+    movers_section lists only names moving >=5% (the authoritative price-alert source).
+    """
+    s, crumb = _yahoo_crumb_session()
+    quotes: dict[str, dict] = {}
+
+    for i in range(0, len(tickers), 50):
+        chunk = tickers[i:i + 50]
+        try:
+            params = {"symbols": ",".join(chunk)}
+            if crumb:
+                params["crumb"] = crumb
+            r = s.get("https://query1.finance.yahoo.com/v7/finance/quote",
+                      params=params, timeout=15)
+            r.raise_for_status()
+            for q in r.json().get("quoteResponse", {}).get("result", []):
+                sym = q.get("symbol", "")
+                quotes[sym] = {
+                    "pct": q.get("regularMarketChangePercent", 0) or 0,
+                    "price": q.get("regularMarketPrice", ""),
+                    "vol": q.get("regularMarketVolume", 0) or 0,
+                    "name": q.get("shortName", ""),
+                }
+        except Exception as e:
+            print(f"  [Quotes] chunk {i//50} failed: {e}")
+
+    if not quotes:
+        return ("[Watchlist quotes unavailable this morning]",
+                "[Watchlist quotes unavailable]")
+
+    movers = sorted(
+        [(t, d) for t, d in quotes.items() if abs(d["pct"]) >= 5],
+        key=lambda x: abs(x[1]["pct"]), reverse=True,
+    )
+    if movers:
+        mlines = [
+            f"{t} ({d['name']}): {d['pct']:+.1f}% | ${d['price']} | Vol: {d['vol']:,}"
+            for t, d in movers
+        ]
+        movers_section = "\n".join(mlines)
+    else:
+        movers_section = "No watchlist stocks with a 5%+ move this morning."
+
+    all_lines = [
+        f"{t}: {d['pct']:+.1f}% | ${d['price']}"
+        for t, d in sorted(quotes.items(), key=lambda x: x[1]["pct"], reverse=True)
+    ]
+    return movers_section, "\n".join(all_lines)
 
 
 def fetch_yahoo_movers() -> str:
@@ -117,13 +196,17 @@ def run_searches(today: str) -> str:
     return "\n\n".join(sections)
 
 
-def build_prompt(today: str, day_of_week: str, yahoo_content: str, search_content: str) -> str:
+def build_prompt(today: str, day_of_week: str, watchlist_movers: str,
+                 yahoo_content: str, search_content: str) -> str:
     return f"""Today is {day_of_week}, {today}. You are a market research assistant for an investor focused on AI infrastructure, optical/photonics, semiconductors, data center construction, power equipment, nuclear energy, and utilities.
 
 ## STOCK WATCHLIST
 {WATCHLIST}
 
-## YAHOO FINANCE — PRICE MOVERS
+## WATCHLIST PRICE MOVERS (>=5%, computed directly from live quotes — AUTHORITATIVE)
+{watchlist_movers}
+
+## YAHOO FINANCE — MARKET-WIDE MOVERS (context only)
 {yahoo_content}
 
 ## WEB SEARCH RESULTS
@@ -132,7 +215,7 @@ def build_prompt(today: str, day_of_week: str, yahoo_content: str, search_conten
 ## YOUR TASK
 Analyze the content above and produce a morning market briefing.
 
-1. PRICE MOVERS: From Yahoo Finance, identify any watchlist stocks with 5%+ moves. For each, find the reason from the search results (earnings beat/miss, guidance change, deal announcement, etc.).
+1. PRICE MOVERS: Use the WATCHLIST PRICE MOVERS section above as the authoritative list of 5%+ moves — it is computed directly from live quotes for every watchlist ticker. For each, find the reason from the search results (earnings beat/miss, guidance change, deal announcement, etc.). If no reason is found, say "reason unclear — investigate."
 
 2. EARNINGS ANALYSIS: For any watchlist company with recent earnings, extract:
    - Exact revenue, EPS vs consensus
@@ -196,21 +279,26 @@ def get_briefing_text() -> str:
     today = datetime.now().strftime("%B %d, %Y")
     day_of_week = datetime.now().strftime("%A")
 
-    print("Fetching Yahoo Finance price movers...")
+    print("Fetching watchlist quotes...")
+    tickers = parse_watchlist_tickers()
+    print(f"  {len(tickers)} watchlist tickers")
+    watchlist_movers, _ = fetch_watchlist_quotes(tickers)
+
+    print("Fetching Yahoo Finance market-wide movers...")
     yahoo_content = fetch_yahoo_movers()
 
     print("Running targeted news searches...")
     search_content = run_searches(today)
 
     print("Sending to Claude for analysis...")
-    prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
+    prompt = build_prompt(today, day_of_week, watchlist_movers, yahoo_content, search_content)
     estimated_tokens = len(prompt) // 4
     print(f"  Prompt size: {len(prompt):,} chars (~{estimated_tokens:,} tokens)")
     if estimated_tokens > 25000:
         # Truncate search content to fit within safe limit
         max_content = 25000 * 4 - len(prompt) + len(search_content)
         search_content = search_content[:max_content]
-        prompt = build_prompt(today, day_of_week, yahoo_content, search_content)
+        prompt = build_prompt(today, day_of_week, watchlist_movers, yahoo_content, search_content)
         print(f"  Trimmed to: {len(prompt):,} chars (~{len(prompt)//4:,} tokens)")
 
     for attempt in range(5):
@@ -238,16 +326,39 @@ def get_briefing_text() -> str:
     return text
 
 
+def render_html(body: str) -> str:
+    """Convert the markdown briefing into a styled HTML email."""
+    html_body = markdown.markdown(body, extensions=["tables", "sane_lists", "nl2br"])
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body {{ font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #1a1a1a;
+         line-height: 1.5; max-width: 760px; margin: 0 auto; padding: 16px; }}
+  h1 {{ font-size: 20px; border-bottom: 2px solid #1F4E78; padding-bottom: 6px; }}
+  h2 {{ font-size: 16px; color: #1F4E78; margin-top: 24px; }}
+  h3 {{ font-size: 14px; color: #333; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }}
+  th, td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; }}
+  th {{ background: #1F4E78; color: #fff; }}
+  tr:nth-child(even) {{ background: #f6f8fa; }}
+  hr {{ border: none; border-top: 1px solid #ddd; margin: 20px 0; }}
+  code {{ background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }}
+</style></head><body>
+{html_body}
+</body></html>"""
+
+
 def send_email(body: str, date: str) -> None:
     sender = os.environ["GMAIL_SENDER"]
     password = os.environ["GMAIL_APP_PASSWORD"]
-    recipient = "Sanjayja@gmail.com"
+    recipient = os.environ.get("GMAIL_RECIPIENT") or sender
 
-    msg = MIMEMultipart()
+    msg = MIMEMultipart("alternative")
     msg["From"] = sender
     msg["To"] = recipient
     msg["Subject"] = f"Morning Market Briefing — {date}"
+    # Plain-text fallback first, then HTML (clients prefer the last part).
     msg.attach(MIMEText(body, "plain", "utf-8"))
+    msg.attach(MIMEText(render_html(body), "html", "utf-8"))
 
     context = ssl.create_default_context()
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
