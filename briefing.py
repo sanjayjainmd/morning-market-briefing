@@ -82,12 +82,25 @@ def _yahoo_crumb_session() -> tuple[requests.Session, str | None]:
         return s, None
 
 
-def fetch_watchlist_quotes(tickers: list[str]) -> tuple[str, str]:
-    """Fetch live quotes for the watchlist and return (movers_section, all_quotes_section).
+def _pct(curr, base):
+    """Safe percent change; returns None if not computable."""
+    try:
+        if base in (None, 0) or curr is None:
+            return None
+        return (curr - base) / base * 100
+    except Exception:
+        return None
 
-    movers_section lists only names moving >=5% (the authoritative price-alert source).
+
+def fetch_watchlist_quotes(tickers: list[str], session=None, crumb=None) -> dict[str, dict]:
+    """Fetch live quotes + intraday momentum fields for every watchlist ticker.
+
+    Returns dict[ticker] -> metrics (pct, price, gap, rvol, vs50dma, vs200dma,
+    off_52w_high, premarket, name, vol).
     """
-    s, crumb = _yahoo_crumb_session()
+    s = session or _yahoo_crumb_session()[0]
+    if crumb is None and session is None:
+        s, crumb = _yahoo_crumb_session()
     quotes: dict[str, dict] = {}
 
     for i in range(0, len(tickers), 50):
@@ -101,37 +114,126 @@ def fetch_watchlist_quotes(tickers: list[str]) -> tuple[str, str]:
             r.raise_for_status()
             for q in r.json().get("quoteResponse", {}).get("result", []):
                 sym = q.get("symbol", "")
+                price = q.get("regularMarketPrice")
+                prev = q.get("regularMarketPreviousClose")
+                openp = q.get("regularMarketOpen")
+                vol = q.get("regularMarketVolume", 0) or 0
+                avgvol = q.get("averageDailyVolume3Month") or 0
                 quotes[sym] = {
-                    "pct": q.get("regularMarketChangePercent", 0) or 0,
-                    "price": q.get("regularMarketPrice", ""),
-                    "vol": q.get("regularMarketVolume", 0) or 0,
                     "name": q.get("shortName", ""),
+                    "pct": q.get("regularMarketChangePercent", 0) or 0,
+                    "price": price,
+                    "vol": vol,
+                    "gap": _pct(openp, prev),
+                    "rvol": (vol / avgvol) if avgvol else None,
+                    "vs50dma": _pct(price, q.get("fiftyDayAverage")),
+                    "vs200dma": _pct(price, q.get("twoHundredDayAverage")),
+                    "off_52w_high": _pct(price, q.get("fiftyTwoWeekHigh")),
+                    "premarket": q.get("preMarketChangePercent"),
                 }
         except Exception as e:
             print(f"  [Quotes] chunk {i//50} failed: {e}")
 
-    if not quotes:
-        return ("[Watchlist quotes unavailable this morning]",
-                "[Watchlist quotes unavailable]")
+    return quotes
 
-    movers = sorted(
-        [(t, d) for t, d in quotes.items() if abs(d["pct"]) >= 5],
-        key=lambda x: abs(x[1]["pct"]), reverse=True,
-    )
+
+def _rsi(closes: list[float], period: int = 14):
+    """Wilder's RSI(14). Returns None if insufficient data."""
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0) for d in deltas]
+    losses = [max(-d, 0) for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - 100 / (1 + rs)
+
+
+def fetch_history_metrics(tickers: list[str], session=None) -> dict[str, dict]:
+    """Per-ticker 5-day & 20-day returns and RSI(14) from 3 months of daily closes."""
+    s = session or requests.Session()
+    s.headers.update(YAHOO_HEADERS)
+    out: dict[str, dict] = {}
+    for t in tickers:
+        try:
+            r = s.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{t}",
+                      params={"range": "3mo", "interval": "1d"}, timeout=12)
+            r.raise_for_status()
+            res = r.json()["chart"]["result"][0]
+            closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
+            if len(closes) < 22:
+                out[t] = {"ret5": None, "ret20": None, "rsi14": _rsi(closes)}
+                continue
+            out[t] = {
+                "ret5": _pct(closes[-1], closes[-6]),
+                "ret20": _pct(closes[-1], closes[-21]),
+                "rsi14": _rsi(closes),
+            }
+        except Exception:
+            out[t] = {"ret5": None, "ret20": None, "rsi14": None}
+    return out
+
+
+def _fmt(v, suffix="%", dec=1):
+    return f"{v:+.{dec}f}{suffix}" if isinstance(v, (int, float)) else "—"
+
+
+def _fmt_rvol(v):
+    return f"{v:.1f}x" if isinstance(v, (int, float)) else "—"
+
+
+def _fmt_rsi(v):
+    return f"{v:.0f}" if isinstance(v, (int, float)) else "—"
+
+
+def build_momentum_sections(quotes: dict, hist: dict) -> tuple[str, str]:
+    """Return (movers_section, momentum_table).
+
+    movers_section: watchlist names with |day move| >= 5% (authoritative price alerts).
+    momentum_table: markdown table for movers + any name flagged for short-term momentum
+    (RVOL>=2, |gap|>=3%, RSI>=70 or <=30, or |5d return|>=10%).
+    """
+    def row(t, d, h):
+        return (f"| {t} | {_fmt(d['pct'])} | {_fmt(d.get('gap'))} | "
+                f"{_fmt_rvol(d.get('rvol'))} | "
+                f"{_fmt(h.get('ret5'))} | {_fmt(h.get('ret20'))} | "
+                f"{_fmt_rsi(h.get('rsi14'))} | "
+                f"{_fmt(d.get('vs50dma'))} | {_fmt(d.get('off_52w_high'))} |")
+
+    def is_momentum(t):
+        d, h = quotes[t], hist.get(t, {})
+        rvol = d.get("rvol") or 0
+        gap = abs(d.get("gap") or 0)
+        rsi = h.get("rsi14")
+        ret5 = abs(h.get("ret5") or 0)
+        return (abs(d["pct"]) >= 5 or rvol >= 2 or gap >= 3
+                or (rsi is not None and (rsi >= 70 or rsi <= 30)) or ret5 >= 10)
+
+    movers = sorted([t for t in quotes if abs(quotes[t]["pct"]) >= 5],
+                    key=lambda t: abs(quotes[t]["pct"]), reverse=True)
     if movers:
-        mlines = [
-            f"{t} ({d['name']}): {d['pct']:+.1f}% | ${d['price']} | Vol: {d['vol']:,}"
-            for t, d in movers
-        ]
-        movers_section = "\n".join(mlines)
+        movers_section = "\n".join(
+            f"{t} ({quotes[t]['name']}): {quotes[t]['pct']:+.1f}% | "
+            f"${quotes[t]['price']} | gap {_fmt(quotes[t].get('gap'))} | "
+            f"RVOL {_fmt_rvol(quotes[t].get('rvol'))}"
+            for t in movers
+        )
     else:
         movers_section = "No watchlist stocks with a 5%+ move this morning."
 
-    all_lines = [
-        f"{t}: {d['pct']:+.1f}% | ${d['price']}"
-        for t, d in sorted(quotes.items(), key=lambda x: x[1]["pct"], reverse=True)
-    ]
-    return movers_section, "\n".join(all_lines)
+    flagged = sorted([t for t in quotes if is_momentum(t)],
+                     key=lambda t: abs(quotes[t]["pct"]), reverse=True)
+    header = ("| Ticker | Day % | Gap % | RVOL | 5d % | 20d % | RSI | vs 50DMA | off 52w-H |\n"
+              "|--------|-------|-------|------|------|-------|-----|----------|-----------|")
+    table = header + "\n" + "\n".join(row(t, quotes[t], hist.get(t, {})) for t in flagged) \
+        if flagged else header + "\n| (no notable short-term momentum) |"
+    return movers_section, table
 
 
 def fetch_yahoo_movers() -> str:
@@ -197,7 +299,7 @@ def run_searches(today: str) -> str:
 
 
 def build_prompt(today: str, day_of_week: str, watchlist_movers: str,
-                 yahoo_content: str, search_content: str) -> str:
+                 momentum_table: str, yahoo_content: str, search_content: str) -> str:
     return f"""Today is {day_of_week}, {today}. You are a market research assistant for an investor focused on AI infrastructure, optical/photonics, semiconductors, data center construction, power equipment, nuclear energy, and utilities.
 
 ## STOCK WATCHLIST
@@ -205,6 +307,12 @@ def build_prompt(today: str, day_of_week: str, watchlist_movers: str,
 
 ## WATCHLIST PRICE MOVERS (>=5%, computed directly from live quotes — AUTHORITATIVE)
 {watchlist_movers}
+
+## SHORT-TERM MOMENTUM TABLE (computed from live quotes + 3mo history — AUTHORITATIVE)
+Columns: Day % = today's move; Gap % = open vs prior close; RVOL = volume vs 3-month avg;
+5d/20d % = trailing returns; RSI = 14-day (>=70 overbought, <=30 oversold);
+vs 50DMA = price vs 50-day MA; off 52w-H = distance below 52-week high.
+{momentum_table}
 
 ## YAHOO FINANCE — MARKET-WIDE MOVERS (context only)
 {yahoo_content}
@@ -216,6 +324,8 @@ def build_prompt(today: str, day_of_week: str, watchlist_movers: str,
 Analyze the content above and produce a morning market briefing.
 
 1. PRICE MOVERS: Use the WATCHLIST PRICE MOVERS section above as the authoritative list of 5%+ moves — it is computed directly from live quotes for every watchlist ticker. For each, find the reason from the search results (earnings beat/miss, guidance change, deal announcement, etc.). If no reason is found, say "reason unclear — investigate."
+
+1b. MOMENTUM: Reproduce the SHORT-TERM MOMENTUM TABLE as given (do not alter the numbers). Then add 2-4 bullet observations highlighting the most notable short-term setups — e.g. gap-ups on high RVOL, names overbought (RSI>=70) or oversold (RSI<=30), breakouts near 52-week highs, or strong 5-day/20-day momentum. Tie to news where possible.
 
 2. EARNINGS ANALYSIS: For any watchlist company with recent earnings, extract:
    - Exact revenue, EPS vs consensus
@@ -246,6 +356,11 @@ AI Infrastructure | Optical | Semiconductors | Nuclear | Power | Data Centers
 PRICE ALERTS — 5%+ MOVERS
 [List watchlist stocks with 5%+ move, or "No watchlist stocks with 5%+ move this morning."]
 - TICKER: +X% | $XX.XX | Reason: [one line]
+
+---
+
+SHORT-TERM MOMENTUM
+[Reproduce the momentum table here, then 2-4 bullet observations on the standout setups]
 
 ---
 
@@ -282,7 +397,12 @@ def get_briefing_text() -> str:
     print("Fetching watchlist quotes...")
     tickers = parse_watchlist_tickers()
     print(f"  {len(tickers)} watchlist tickers")
-    watchlist_movers, _ = fetch_watchlist_quotes(tickers)
+    session, crumb = _yahoo_crumb_session()
+    quotes = fetch_watchlist_quotes(tickers, session=session, crumb=crumb)
+
+    print("Fetching history (5d/20d returns, RSI-14)...")
+    hist = fetch_history_metrics(list(quotes.keys()), session=session)
+    watchlist_movers, momentum_table = build_momentum_sections(quotes, hist)
 
     print("Fetching Yahoo Finance market-wide movers...")
     yahoo_content = fetch_yahoo_movers()
@@ -291,14 +411,14 @@ def get_briefing_text() -> str:
     search_content = run_searches(today)
 
     print("Sending to Claude for analysis...")
-    prompt = build_prompt(today, day_of_week, watchlist_movers, yahoo_content, search_content)
+    prompt = build_prompt(today, day_of_week, watchlist_movers, momentum_table, yahoo_content, search_content)
     estimated_tokens = len(prompt) // 4
     print(f"  Prompt size: {len(prompt):,} chars (~{estimated_tokens:,} tokens)")
     if estimated_tokens > 25000:
         # Truncate search content to fit within safe limit
         max_content = 25000 * 4 - len(prompt) + len(search_content)
         search_content = search_content[:max_content]
-        prompt = build_prompt(today, day_of_week, watchlist_movers, yahoo_content, search_content)
+        prompt = build_prompt(today, day_of_week, watchlist_movers, momentum_table, yahoo_content, search_content)
         print(f"  Trimmed to: {len(prompt):,} chars (~{len(prompt)//4:,} tokens)")
 
     for attempt in range(5):
