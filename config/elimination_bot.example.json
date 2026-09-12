@@ -1,0 +1,56 @@
+{
+  "bankroll": 1000.0,
+  "db_path": "data/elimination_bot.sqlite3",
+  "research_path": "data/public_research.json",
+  "kill_switch_path": "data/KILL_SWITCH",
+  "dormant_path": "data/DORMANT",
+  "shows": [],
+  "risk": {
+    "min_net_edge": 0.10,
+    "safety_margin": 0.02,
+    "max_spread": 0.06,
+    "min_top_of_book_size": 25,
+    "min_depth_contracts": 100,
+    "max_book_participation": 0.25,
+    "kelly_fraction": 0.25,
+    "max_fraction_per_market": 0.02,
+    "max_fraction_per_group": 0.05,
+    "max_fraction_per_cycle": 0.05,
+    "max_gross_exposure": 0.30,
+    "min_contracts": 5,
+    "max_contracts": 2500,
+    "min_minutes_to_close": 20.0,
+    "max_days_to_close": 21.0,
+    "max_drawdown": 0.20,
+    "max_model_prob": 0.97,
+    "min_model_prob": 0.03
+  },
+  "model": {
+    "prior_weight": 3.0,
+    "max_logit_shift": 2.0,
+    "min_source_observations": 10,
+    "shrinkage_k": 20.0,
+    "normalize_field": true,
+    "eliminations_per_group": 1.0
+  },
+  "fees": {
+    "kalshi_fee_rate": 0.07,
+    "polymarket_taker_fee": 0.0,
+    "default_fee_rate": 0.07
+  },
+  "execution": {
+    "mode": "shadow",
+    "venues": ["kalshi", "polymarket"],
+    "cycle_minutes": 25,
+    "request_timeout": 15.0,
+    "max_markets_per_cycle": 250,
+    "adverse_selection_haircut": 0.005
+  },
+  "funding": {
+    "monthly_cost": 40.0,
+    "reserve_months_target": 12.0,
+    "reserve_months_warn": 6.0,
+    "sweep_from_realized_only": true,
+    "max_sweep_fraction_of_realized": 0.5
+  }
+}

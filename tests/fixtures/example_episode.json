@@ -1,0 +1,133 @@
+{
+  "venue": "fixture",
+  "markets": [
+    {
+      "market_id": "ELIM-EP7-ALEX",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Alex",
+      "title": "Alex eliminated in episode 7",
+      "volume": 12000,
+      "url": "https://example.test/ep7/alex",
+      "book": {
+        "bids": [
+          [
+            0.17,
+            400
+          ],
+          [
+            0.16,
+            900
+          ]
+        ],
+        "asks": [
+          [
+            0.2,
+            500
+          ],
+          [
+            0.22,
+            900
+          ]
+        ]
+      },
+      "close_in_minutes": 600
+    },
+    {
+      "market_id": "ELIM-EP7-BRETT",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Brett",
+      "title": "Brett eliminated in episode 7",
+      "volume": 9000,
+      "url": "https://example.test/ep7/brett",
+      "book": {
+        "bids": [
+          [
+            0.3,
+            300
+          ],
+          [
+            0.29,
+            800
+          ]
+        ],
+        "asks": [
+          [
+            0.33,
+            400
+          ],
+          [
+            0.35,
+            800
+          ]
+        ]
+      },
+      "close_in_minutes": 600
+    },
+    {
+      "market_id": "ELIM-EP7-CASS",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Cass",
+      "title": "Cass eliminated in episode 7",
+      "volume": 7000,
+      "url": "https://example.test/ep7/cass",
+      "book": {
+        "bids": [
+          [
+            0.24,
+            350
+          ],
+          [
+            0.23,
+            700
+          ]
+        ],
+        "asks": [
+          [
+            0.27,
+            350
+          ],
+          [
+            0.29,
+            700
+          ]
+        ]
+      },
+      "close_in_minutes": 600
+    },
+    {
+      "market_id": "ELIM-EP7-DEV",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Dev",
+      "title": "Dev eliminated in episode 7",
+      "volume": 4000,
+      "url": "https://example.test/ep7/dev",
+      "book": {
+        "bids": [
+          [
+            0.19,
+            200
+          ],
+          [
+            0.18,
+            400
+          ]
+        ],
+        "asks": [
+          [
+            0.23,
+            200
+          ],
+          [
+            0.26,
+            400
+          ]
+        ]
+      },
+      "close_in_minutes": 600
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "observations": [
+    {
+      "source_id": "example-spoiler-archive",
+      "show": "Example Elimination Show",
+      "subject": "Alex",
+      "access": "public",
+      "url": "https://example.test/spoilers/ep7",
+      "prob": 0.78,
+      "confidence": 0.9,
+      "kind": "public_spoiler",
+      "note": "publicly posted filming-location report"
+    },
+    {
+      "source_id": "example-fan-poll",
+      "show": "Example Elimination Show",
+      "subject": "Brett",
+      "access": "public",
+      "url": "https://example.test/poll/ep7",
+      "lean": 0.4,
+      "confidence": 0.5,
+      "kind": "fan_poll",
+      "note": "open fan poll, n=4120"
+    },
+    {
+      "source_id": "anonymous-production-tip",
+      "show": "Example Elimination Show",
+      "subject": "Cass",
+      "access": "nonpublic",
+      "url": "https://example.test/dm",
+      "prob": 0.95,
+      "confidence": 1.0,
+      "note": "claimed crew leak \u2014 must never reach the model"
+    }
+  ]
+}

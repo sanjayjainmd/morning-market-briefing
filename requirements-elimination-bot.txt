@@ -1,0 +1,4 @@
+# Runtime dependency for the elimination-market engine.
+# Everything else it uses (sqlite3, argparse, json, statistics) is stdlib,
+# and the tests run on unittest with no third-party packages at all.
+requests>=2.31.0

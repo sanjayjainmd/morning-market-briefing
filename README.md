@@ -40,3 +40,27 @@ git push -u origin main
 ## Schedule
 
 Runs automatically Mon–Fri at 10:09 AM ET (14:09 UTC). Adjust the cron in `.github/workflows/morning-briefing.yml` if needed.
+
+---
+
+## Elimination-market mispricing engine
+
+A second, independent subsystem lives in `elimination_bot/`: an autonomous
+research engine for reality-TV elimination markets on Kalshi and Polymarket.
+Every 25 minutes it discovers open markets, prices them against its own
+estimate built from **public information only**, applies a fractional-Kelly
+risk policy, and records every signal, decision, order, fill and outcome.
+
+It runs in shadow mode — `broker.LiveBroker` refuses to place real orders —
+until the evidence in `python -m elimination_bot.cli readiness` says
+otherwise. Running out of hosting money pauses it recoverably; nothing is
+deleted.
+
+```bash
+pip install -r requirements-elimination-bot.txt
+python -m elimination_bot.cli --fixture tests/fixtures/example_episode.json cycle -v
+python -m unittest discover -s tests
+```
+
+Full documentation, including the information policy, the risk defaults, the
+funding/dormancy model and the go-live criteria: **[docs/elimination-bot.md](docs/elimination-bot.md)**.

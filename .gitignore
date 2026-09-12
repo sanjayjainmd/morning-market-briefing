@@ -1,0 +1,9 @@
+# Local trading-engine state: audit database, exports, operating markers.
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+__pycache__/
+*.py[cod]
+.venv/

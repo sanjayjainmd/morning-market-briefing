@@ -1,0 +1,72 @@
+name: Elimination Shadow Cycle
+
+# Shadow mode only: this workflow never places a real order (see
+# elimination_bot/broker.py). It runs one research cycle and commits the
+# audit log so the season's record survives the runner.
+on:
+  workflow_dispatch:
+  # Enable deliberately. A 25-minute cadence commits to this repo ~57 times a
+  # day; a small always-on host with a cron line is the better home for it.
+  # schedule:
+  #   - cron: "*/25 * * * *"
+
+concurrency:
+  group: elimination-shadow
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-elimination-bot.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Restore audit log
+        run: |
+          mkdir -p data shadow
+          if [ -f shadow/elimination_bot.sqlite3 ]; then
+            cp shadow/elimination_bot.sqlite3 data/elimination_bot.sqlite3
+          fi
+          if [ -f shadow/public_research.json ]; then
+            cp shadow/public_research.json data/public_research.json
+          fi
+
+      - name: Run one shadow cycle
+        run: |
+          CONFIG=config/elimination_bot.json
+          [ -f "$CONFIG" ] || CONFIG=config/elimination_bot.example.json
+          python -m elimination_bot.cli --config "$CONFIG" cycle -v
+
+      - name: Export audit log
+        if: always()
+        run: |
+          CONFIG=config/elimination_bot.json
+          [ -f "$CONFIG" ] || CONFIG=config/elimination_bot.example.json
+          python -m elimination_bot.cli --config "$CONFIG" export --out shadow/export
+          cp data/elimination_bot.sqlite3 shadow/elimination_bot.sqlite3
+
+      - name: Commit the shadow record
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add shadow/
+          if git diff --staged --quiet; then
+            echo "Nothing new to record."
+          else
+            git commit -m "Shadow cycle $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
