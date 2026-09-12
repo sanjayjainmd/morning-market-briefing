@@ -97,7 +97,14 @@ class PolymarketPublicData(MarketDataSource):
             volume=int(float(raw.get("volumeNum") or raw.get("volume") or 0)),
             open_interest=int(float(raw.get("openInterest") or 0)),
             url=f"https://polymarket.com/event/{raw.get('slug', '')}",
-            metadata={"yes_token_id": yes_token, "event_title": event_title},
+            metadata={
+                "yes_token_id": yes_token,
+                "event_title": event_title,
+                "status": "closed" if raw.get("closed") else "open",
+                "rules": str(raw.get("description") or ""),
+                "resolution_source": raw.get("resolutionSource")
+                or raw.get("resolution_source"),
+            },
         )
 
     # --------------------------------------------------------------- quotes

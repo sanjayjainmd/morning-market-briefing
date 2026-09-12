@@ -1,0 +1,75 @@
+{
+  "venue": "fixture",
+  "markets": [
+    {
+      "market_id": "ELIM-EP7-ALEX",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Alex",
+      "title": "Who goes home next?",
+      "volume": 12000,
+      "url": "https://example.test/ep7/alex",
+      "book": {
+        "bids": [
+          [
+            0.17,
+            400
+          ],
+          [
+            0.16,
+            900
+          ]
+        ],
+        "asks": [
+          [
+            0.2,
+            500
+          ],
+          [
+            0.22,
+            900
+          ]
+        ]
+      },
+      "close_in_minutes": 600,
+      "metadata": {
+        "status": "open"
+      }
+    },
+    {
+      "market_id": "ELIM-EP7-BRETT",
+      "group_id": "EP7",
+      "show": "Example Elimination Show",
+      "subject": "Brett",
+      "title": "Who goes home next?",
+      "volume": 9000,
+      "url": "https://example.test/ep7/brett",
+      "book": {
+        "bids": [
+          [
+            0.3,
+            300
+          ],
+          [
+            0.29,
+            800
+          ]
+        ],
+        "asks": [
+          [
+            0.33,
+            400
+          ],
+          [
+            0.35,
+            800
+          ]
+        ]
+      },
+      "close_in_minutes": 600,
+      "metadata": {
+        "status": "open"
+      }
+    }
+  ]
+}

@@ -6,8 +6,8 @@
   "dormant_path": "data/DORMANT",
   "shows": [],
   "risk": {
-    "min_net_edge": 0.10,
-    "safety_margin": 0.02,
+    "min_net_edge": 0.1,
+    "safety_margin": 0.0,
     "max_spread": 0.06,
     "min_top_of_book_size": 25,
     "min_depth_contracts": 100,
@@ -16,12 +16,13 @@
     "max_fraction_per_market": 0.02,
     "max_fraction_per_group": 0.05,
     "max_fraction_per_cycle": 0.05,
-    "max_gross_exposure": 0.30,
+    "max_gross_exposure": 0.3,
     "min_contracts": 5,
     "max_contracts": 2500,
+    "max_signal_age_hours": 96.0,
     "min_minutes_to_close": 20.0,
     "max_days_to_close": 21.0,
-    "max_drawdown": 0.20,
+    "max_drawdown": 0.2,
     "max_model_prob": 0.97,
     "min_model_prob": 0.03
   },
@@ -31,16 +32,90 @@
     "min_source_observations": 10,
     "shrinkage_k": 20.0,
     "normalize_field": true,
-    "eliminations_per_group": 1.0
+    "eliminations_per_group": 1.0,
+    "recency_half_life_hours": 72.0
+  },
+  "correlation": {
+    "clusters": {},
+    "cluster_by_domain": true,
+    "cluster_by_claim": true,
+    "claim_window_hours": 36.0,
+    "claim_lean_tolerance": 0.25,
+    "extra_member_weight": 0.25
+  },
+  "uncertainty": {
+    "base_half_width": 0.08,
+    "min_half_width": 0.03,
+    "max_half_width": 0.3,
+    "independence_exponent": 0.5,
+    "dispersion_weight": 0.6,
+    "staleness_penalty_per_day": 0.01,
+    "unproven_source_penalty": 0.04,
+    "prior_only_half_width": 0.05
+  },
+  "verification": {
+    "require_rules": true,
+    "require_resolution_source": true,
+    "require_close_time": true,
+    "require_open_status": true,
+    "block_if_already_aired": true,
+    "require_ambiguity_resolution": true,
+    "ambiguity_terms": [
+      "withdraw",
+      "withdrawal",
+      "quit",
+      "quits",
+      "disqualif",
+      "medical",
+      "evacuat",
+      "forfeit",
+      "double elimination",
+      "no elimination",
+      "non-elimination",
+      "tie",
+      "postpone"
+    ],
+    "resolution_terms": [
+      "count",
+      "counts",
+      "deemed",
+      "treated",
+      "considered",
+      "shall",
+      "will resolve",
+      "resolves",
+      "resolution"
+    ],
+    "min_rules_chars": 40
+  },
+  "exits": {
+    "min_exit_edge": 0.04,
+    "exit_cost_buffer": 0.01,
+    "reduce_fraction": 0.5,
+    "max_signal_age_hours": 96.0,
+    "flatten_minutes_to_close": 30.0,
+    "emergency_loss_fraction": 0.6,
+    "allow_stale_exit": true,
+    "reversal_drop": 0.1,
+    "max_forced_exit_slippage": 0.05,
+    "rotate_for_better_opportunity": false,
+    "rotation_edge_advantage": 0.1
   },
   "fees": {
     "kalshi_fee_rate": 0.07,
     "polymarket_taker_fee": 0.0,
-    "default_fee_rate": 0.07
+    "default_fee_rate": 0.07,
+    "verified_at": null,
+    "max_schedule_age_days": 90.0,
+    "schedule_url": "https://kalshi.com/docs/kalshi-fee-schedule.pdf",
+    "require_verified_schedule_for_live": true
   },
   "execution": {
     "mode": "shadow",
-    "venues": ["kalshi", "polymarket"],
+    "venues": [
+      "kalshi",
+      "polymarket"
+    ],
     "cycle_minutes": 25,
     "request_timeout": 15.0,
     "max_markets_per_cycle": 250,

@@ -9,10 +9,11 @@ the field is renormalised to the number of eliminations expected.
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Iterable, Mapping, Sequence
 
-from .config import ModelConfig
-from .models import Estimate, Signal
+from .config import CorrelationConfig, ModelConfig, UncertaintyConfig
+from .models import Estimate, Signal, utcnow
 
 EPS = 1e-6
 
@@ -57,6 +58,29 @@ def source_weight(
     return max(0.0, min(1.0, weight))
 
 
+def recency_decay(signal: Signal, half_life_hours: float, now: datetime | None = None) -> float:
+    """Weight decay for a claim's age. A week-old spoiler is not fresh news."""
+    if half_life_hours <= 0:
+        return 1.0
+    now = now or utcnow()
+    stamp = signal.published_at or signal.observed_at
+    age_hours = max(0.0, (now - stamp).total_seconds() / 3600.0)
+    return 0.5 ** (age_hours / half_life_hours)
+
+
+def signal_age_hours(signal: Signal, now: datetime | None = None) -> float:
+    now = now or utcnow()
+    stamp = signal.published_at or signal.observed_at
+    return max(0.0, (now - stamp).total_seconds() / 3600.0)
+
+
+def is_unproven(source_id: str, scores: Mapping[str, Mapping[str, float]], config: ModelConfig) -> bool:
+    score = scores.get(source_id)
+    if not score:
+        return True
+    return float(score.get("observations") or 0) < config.min_source_observations
+
+
 def estimate_probability(
     *,
     market_key: str,
@@ -64,18 +88,33 @@ def estimate_probability(
     market_prob: float,
     signals: Sequence[Signal],
     config: ModelConfig,
+    correlation: CorrelationConfig | None = None,
+    uncertainty: UncertaintyConfig | None = None,
     source_scores: Mapping[str, Mapping[str, float]] | None = None,
+    now: datetime | None = None,
 ) -> Estimate:
-    """Blend the market prior with weighted, lawful public signals."""
+    """Blend the market prior with weighted, lawful, de-duplicated public signals.
+
+    Correlated repetitions of one rumour are collapsed into a single claim
+    before anything moves, and the result carries an uncertainty interval
+    rather than pretending to be a point.
+    """
+    from .correlation import cluster_signals, effective_source_count
+    from .uncertainty import UncertaintyInputs, interval as build_interval
+
+    correlation = correlation or CorrelationConfig()
+    uncertainty_config = uncertainty or UncertaintyConfig()
     scores = source_scores or {}
+    now = now or utcnow()
     prior = clamp(market_prob)
     prior_logit = logit(prior)
 
     components: list[dict] = [
         {"source_id": "market_prior", "lean": prior_logit, "weight": config.prior_weight}
     ]
-    shift = 0.0
-    weight_sum = 0.0
+
+    usable: list[Signal] = []
+    weights: list[float] = []
     for signal in signals:
         if not signal.tradeable:
             components.append(
@@ -86,16 +125,30 @@ def estimate_probability(
                 }
             )
             continue
-        w = source_weight(scores.get(signal.source_id), config) * clamp(signal.confidence, 0.0, 1.0)
-        shift += w * signal.lean
-        weight_sum += w
+        reliability = source_weight(scores.get(signal.source_id), config)
+        decay = recency_decay(signal, config.recency_half_life_hours, now)
+        weight = reliability * clamp(signal.confidence, 0.0, 1.0) * decay
+        usable.append(signal)
+        weights.append(weight)
+
+    clusters = cluster_signals(usable, weights, correlation)
+    shift = 0.0
+    weight_sum = 0.0
+    for cluster in clusters:
+        cluster_weight = cluster.effective_weight(correlation.extra_member_weight)
+        cluster_lean = cluster.effective_lean()
+        shift += cluster_weight * cluster_lean
+        weight_sum += cluster_weight
+        lead, _ = cluster.lead()
         components.append(
             {
-                "source_id": signal.source_id,
-                "lean": signal.lean,
-                "confidence": signal.confidence,
-                "weight": w,
-                "url": signal.url,
+                "cluster_id": cluster.cluster_id,
+                "source_id": lead.source_id,
+                "members": cluster.members(),
+                "repetitions": cluster.size,
+                "lean": cluster_lean,
+                "weight": cluster_weight,
+                "url": lead.url,
             }
         )
 
@@ -108,13 +161,49 @@ def estimate_probability(
         components.append({"source_id": "cap", "raw_shift": raw_shift, "applied": capped})
 
     prob = sigmoid(prior_logit + capped)
+
+    unproven = [s.source_id for s in usable if is_unproven(s.source_id, scores, config)]
+    stalest = max((signal_age_hours(s, now) for s in usable), default=0.0)
+    inputs = UncertaintyInputs(
+        effective_sources=effective_source_count(clusters, correlation.extra_member_weight),
+        dispersion=_dispersion(clusters, correlation.extra_member_weight),
+        unproven_share=_unproven_share(clusters, correlation.extra_member_weight, set(unproven)),
+        stalest_hours=stalest,
+    )
+    band = build_interval(prob, inputs, uncertainty_config)
+
     return Estimate(
         market_key=market_key,
         subject=subject,
         prob=prob,
         prior_prob=prior,
         components=components,
+        interval=band,
+        effective_sources=inputs.effective_sources,
+        stalest_signal_hours=stalest if usable else None,
     )
+
+
+def _dispersion(clusters, extra_member_weight: float) -> float:
+    weights = [c.effective_weight(extra_member_weight) for c in clusters]
+    total = sum(weights)
+    if total <= 0 or len(clusters) < 2:
+        return 0.0
+    leans = [c.effective_lean() for c in clusters]
+    mean = sum(l * w for l, w in zip(leans, weights)) / total
+    return (sum(w * (l - mean) ** 2 for l, w in zip(leans, weights)) / total) ** 0.5
+
+
+def _unproven_share(clusters, extra_member_weight: float, unproven: set[str]) -> float:
+    weights = [c.effective_weight(extra_member_weight) for c in clusters]
+    total = sum(weights)
+    if total <= 0:
+        return 1.0 if clusters else 0.0
+    unproven_weight = sum(
+        w for c, w in zip(clusters, weights)
+        if all(s.source_id in unproven for s in c.signals)
+    )
+    return unproven_weight / total
 
 
 def normalize_field(
@@ -148,6 +237,10 @@ def normalize_field(
     for e in live:
         e.components.append({"source_id": "field_normalization", "shift": shift})
         e.prob = sigmoid(logit(e.prob) + shift)
+        if e.interval is not None:
+            e.interval.point = e.prob
+            e.interval.low = sigmoid(logit(e.interval.low) + shift)
+            e.interval.high = sigmoid(logit(e.interval.high) + shift)
         e.normalized = True
     return list(estimates)
 

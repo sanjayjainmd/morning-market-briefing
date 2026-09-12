@@ -47,9 +47,11 @@ Runs automatically Mon–Fri at 10:09 AM ET (14:09 UTC). Adjust the cron in `.gi
 
 A second, independent subsystem lives in `elimination_bot/`: an autonomous
 research engine for reality-TV elimination markets on Kalshi and Polymarket.
-Every 25 minutes it discovers open markets, prices them against its own
-estimate built from **public information only**, applies a fractional-Kelly
-risk policy, and records every signal, decision, order, fill and outcome.
+Every 25 minutes it verifies contract terms, prices markets against its own
+estimate built from **public information only**, buys only when the
+*conservative* end of that estimate beats the executable price after fees and
+slippage, manages exits on expected value rather than on profit or loss, and
+records every signal, decision, order, fill and outcome.
 
 It runs in shadow mode — `broker.LiveBroker` refuses to place real orders —
 until the evidence in `python -m elimination_bot.cli readiness` says

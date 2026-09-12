@@ -26,6 +26,17 @@ from .base import (
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 
+def _resolution_source(raw: dict[str, Any]) -> str | None:
+    """Whoever the venue says settles the market, however it spells the field."""
+    sources = raw.get("settlement_sources")
+    if isinstance(sources, list) and sources:
+        first = sources[0]
+        if isinstance(first, dict):
+            return first.get("name") or first.get("url")
+        return str(first)
+    return raw.get("settlement_source") or raw.get("source") or None
+
+
 class KalshiPublicData(MarketDataSource):
     name = "kalshi"
 
@@ -81,6 +92,14 @@ class KalshiPublicData(MarketDataSource):
                 "status": raw.get("status"),
                 "category": category,
                 "event_ticker": raw.get("event_ticker"),
+                "subtitle": subtitle,
+                # Contract terms, read by elimination_bot.contract before the
+                # market is priced at all.
+                "rules": " ".join(
+                    str(raw.get(key) or "")
+                    for key in ("rules_primary", "rules_secondary")
+                ).strip(),
+                "resolution_source": _resolution_source(raw),
             },
         )
 

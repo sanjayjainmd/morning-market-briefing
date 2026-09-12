@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from .edge import FeeModel, walk_book
-from .models import Action, Decision, Fill, Order, OrderBook, Quote, utcnow
+from .models import Decision, Fill, Order, Quote
 from .storage import AuditLog, new_id
 
 
@@ -68,9 +68,13 @@ class PaperBroker(Broker):
             self.log.record_order(order)
             return order, None
 
-        # Pay slightly worse than the book showed: queue position, latency,
-        # and the fact that liquidity leans away from informed flow.
-        price = min(order.limit_price, vwap + self.haircut)
+        # Fill slightly worse than the book showed: queue position, latency,
+        # and the fact that liquidity leans away from informed flow. Worse
+        # means paying more when buying and receiving less when selling.
+        if decision.action.is_sell:
+            price = max(order.limit_price, vwap - self.haircut)
+        else:
+            price = min(order.limit_price, vwap + self.haircut)
         fill = Fill(
             order_id=order.order_id,
             market_key=decision.market_key,

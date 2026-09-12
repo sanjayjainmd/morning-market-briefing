@@ -1,13 +1,16 @@
 """Command line: ``python -m elimination_bot.cli <command>``.
 
     discover    list the elimination markets the venues are showing
+    verify      show which contracts pass the terms check, and why
     cycle       run one full shadow cycle (the thing a cron calls)
+    positions   open positions and what the exit rule says about each
     settle      record outcomes from a JSON file and grade the sources
     report      recent decisions, fills and open positions
     readiness   the go-live criteria, measured against the log
     sources     the source-reliability table
     status      funding, dormancy, kill switch, drawdown
     fund        deposit / pay hosting
+    fees        show fee schedules and record that they were verified
     pause       enter dormancy (cancel orders, stop trading, keep everything)
     resume      leave dormancy
     export      dump the audit log as JSONL
@@ -18,16 +21,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 from .broker import build_broker
 from .config import BotConfig
-from .edge import fee_model_for
-from .engine import Engine
+from .contract import verify as verify_contract
+from .engine import Engine, fee_schedule_path
+from .exits import ExitContext, assess_exit
+from .fees import load_fee_book
 from .evaluate import readiness_report, render_json
 from .funding import Treasury, kill_switch_engaged
-from .models import Outcome, utcnow
+from .models import Outcome
 from .signals import MicrostructureSource, PublicResearchSource
 from .signals.base import PublicInfoPolicy
 from .signals.registry import update_source_scores
@@ -44,8 +50,11 @@ def build_engine(config: BotConfig, log: AuditLog, fixture: str | None = None) -
         PublicResearchSource(config.research_path),
         MicrostructureSource(),
     ]
-    broker = build_broker(config, log, fee_model_for("kalshi", config.fees))
-    return Engine(config, log, sources, signal_sources, broker, PublicInfoPolicy())
+    fee_book = load_fee_book(config.fees, fee_schedule_path(config.db_path))
+    broker = build_broker(config, log, fee_book.model("kalshi"))
+    return Engine(
+        config, log, sources, signal_sources, broker, PublicInfoPolicy(), fee_book
+    )
 
 
 def cmd_discover(args, config: BotConfig, log: AuditLog) -> int:
@@ -60,10 +69,92 @@ def cmd_discover(args, config: BotConfig, log: AuditLog) -> int:
     return 0
 
 
+def cmd_verify(args, config: BotConfig, log: AuditLog) -> int:
+    engine = build_engine(config, log, args.fixture)
+    markets = []
+    for source in engine.sources:
+        markets.extend(source.discover(config.shows, limit=config.execution.max_markets_per_cycle))
+    ok = 0
+    for market in markets:
+        result = verify_contract(market, config.verification)
+        ok += result.ok
+        if result.ok and not args.verbose:
+            continue
+        mark = "OK  " if result.ok else "FAIL"
+        print(f"[{mark}] {market.subject[:26]:<28} {result.episode or '?':<12} {result.reason()}")
+    print(f"\n{ok}/{len(markets)} contracts verified")
+    return 0
+
+
+def cmd_positions(args, config: BotConfig, log: AuditLog) -> int:
+    engine = build_engine(config, log, args.fixture)
+    open_positions = log.open_positions()
+    if not open_positions:
+        print("no open positions")
+        return 0
+    quotes: dict = {}
+    markets = {}
+    for source in engine.sources:
+        found = source.discover(config.shows, limit=config.execution.max_markets_per_cycle)
+        markets.update({m.key: m for m in found})
+        quotes.update(source.fetch_quotes([m for m in found if m.key in open_positions]))
+
+    for key, entry in open_positions.items():
+        position = entry["position"]
+        print(
+            f"{key:<44} {position.open_contracts:>5} contracts"
+            f"  basis ${position.open_cost:.2f}  entry {position.entry_vwap:.3f}"
+        )
+        quote = quotes.get(key)
+        market = markets.get(key)
+        if quote is None or market is None:
+            print("    (not quoted right now — cannot assess an exit)")
+            continue
+        assessment = assess_exit(
+            position=position,
+            quote=quote,
+            estimate=None,
+            config=config,
+            fee_model=engine.fee_book.model(market.venue),
+            context=ExitContext(),
+        )
+        print(f"    {assessment.trigger}: {'; '.join(assessment.reasons)}")
+    return 0
+
+
+def cmd_fees(args, config: BotConfig, log: AuditLog) -> int:
+    book = load_fee_book(config.fees, fee_schedule_path(config.db_path))
+    for line in book.describe():
+        print(line)
+    warning = book.warning(config.execution.venues)
+    print(f"\n{warning}" if warning else "\nall configured venues have a current fee schedule")
+    if args.verified_today:
+        path = Path(fee_schedule_path(config.db_path))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "verified_at": datetime.now(timezone.utc).date().isoformat(),
+            "source": config.fees.schedule_url,
+            "venues": {
+                venue: {
+                    "rate": book.schedule(venue).rate,
+                    "fixed_per_contract": book.schedule(venue).fixed_per_contract,
+                }
+                for venue in config.execution.venues
+            },
+        }
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(f"recorded verification in {path}")
+    return 0
+
+
 def cmd_cycle(args, config: BotConfig, log: AuditLog) -> int:
     engine = build_engine(config, log, args.fixture)
     report = engine.run_cycle()
     print(report.summary())
+    for warning in report.warnings:
+        print(f"  warning: {warning}")
+    for rejection in report.preflight_rejections:
+        print(f"  preflight: {rejection}")
     for error in report.errors:
         print(f"  error: {error}", file=sys.stderr)
     for dropped in report.signals_dropped:
@@ -114,7 +205,10 @@ def cmd_report(args, config: BotConfig, log: AuditLog) -> int:
     if positions:
         print("\nOpen positions (unsettled):")
         for key, pos in positions.items():
-            print(f"  {key:<44} {pos['contracts']:>5} contracts  cost ${pos['cost']:.2f}")
+            print(
+                f"  {key:<44} {pos['contracts']:>5} contracts"
+                f"  basis ${pos['cost']:.2f}  entry {pos['entry_vwap']:.3f}"
+            )
     print("\n" + json.dumps(log.counts(), indent=2))
     return 0
 
@@ -209,6 +303,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("discover", help="list open elimination markets")
     p.set_defaults(func=cmd_discover)
+
+    p = sub.add_parser("verify", help="check contract terms without trading")
+    p.add_argument("-v", "--verbose", action="store_true", help="show passes too")
+    p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("positions", help="open positions and their exit assessment")
+    p.set_defaults(func=cmd_positions)
+
+    p = sub.add_parser("fees", help="fee schedules and their verification age")
+    p.add_argument(
+        "--verified-today",
+        action="store_true",
+        help="record that you checked the venue's published schedule today",
+    )
+    p.set_defaults(func=cmd_fees)
 
     p = sub.add_parser("cycle", help="run one shadow cycle")
     p.add_argument("-v", "--verbose", action="store_true", help="show passes too")

@@ -5,11 +5,22 @@
       "show": "Example Elimination Show",
       "subject": "Alex",
       "access": "public",
-      "url": "https://example.test/spoilers/ep7",
+      "url": "https://spoiler-archive.test/ep7",
       "prob": 0.78,
       "confidence": 0.9,
       "kind": "public_spoiler",
       "note": "publicly posted filming-location report"
+    },
+    {
+      "source_id": "example-editing-model",
+      "show": "Example Elimination Show",
+      "subject": "Alex",
+      "access": "public",
+      "url": "https://editing-model.test/ep7",
+      "prob": 0.72,
+      "confidence": 0.85,
+      "kind": "edit_analysis",
+      "note": "independent public edit-visibility analysis"
     },
     {
       "source_id": "example-fan-poll",
@@ -31,6 +42,17 @@
       "prob": 0.95,
       "confidence": 1.0,
       "note": "claimed crew leak \u2014 must never reach the model"
+    },
+    {
+      "source_id": "syndicated-mirror-a",
+      "show": "Example Elimination Show",
+      "subject": "Alex",
+      "access": "public",
+      "url": "https://spoiler-archive.test/ep7-mirror",
+      "prob": 0.78,
+      "confidence": 0.9,
+      "kind": "public_spoiler",
+      "note": "same archive's mirror page \u2014 must not count as a second source"
     }
   ]
 }

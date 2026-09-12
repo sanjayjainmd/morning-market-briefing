@@ -45,7 +45,33 @@ class Side(str, Enum):
 class Action(str, Enum):
     BUY_YES = "buy_yes"
     BUY_NO = "buy_no"
+    SELL_YES = "sell_yes"
+    SELL_NO = "sell_no"
     PASS = "pass"
+
+    @property
+    def is_buy(self) -> bool:
+        return self in (Action.BUY_YES, Action.BUY_NO)
+
+    @property
+    def is_sell(self) -> bool:
+        return self in (Action.SELL_YES, Action.SELL_NO)
+
+    @property
+    def side(self) -> "Side | None":
+        if self in (Action.BUY_YES, Action.SELL_YES):
+            return Side.YES
+        if self in (Action.BUY_NO, Action.SELL_NO):
+            return Side.NO
+        return None
+
+    @property
+    def closing(self) -> "Action | None":
+        """The action that flattens a position opened by this one."""
+        return {
+            Action.BUY_YES: Action.SELL_YES,
+            Action.BUY_NO: Action.SELL_NO,
+        }.get(self)
 
 
 class Access(str, Enum):
@@ -160,6 +186,39 @@ class Signal:
 
 
 @dataclass
+class ProbabilityInterval:
+    """A point estimate with the uncertainty around it made explicit.
+
+    The bot never trades on the point estimate. Buying YES uses ``low``;
+    buying NO uses ``1 - high``. Both are the pessimistic end for the side
+    being bought, so a wide interval simply means no trade.
+    """
+
+    point: float
+    low: float
+    high: float
+    components: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def half_width(self) -> float:
+        return (self.high - self.low) / 2
+
+    def conservative(self, action: "Action") -> float:
+        """The probability of the bought side, taken from its pessimistic end."""
+        if action is Action.BUY_YES:
+            return self.low
+        if action is Action.BUY_NO:
+            return 1 - self.high
+        # Exits are judged against the optimistic end of what we still hold:
+        # selling should require the market to beat the best case for holding.
+        if action is Action.SELL_YES:
+            return self.high
+        if action is Action.SELL_NO:
+            return 1 - self.low
+        return self.point
+
+
+@dataclass
 class Estimate:
     market_key: str
     subject: str
@@ -167,11 +226,19 @@ class Estimate:
     prior_prob: float                      # the market prior we shrank toward
     components: list[dict[str, Any]] = field(default_factory=list)
     normalized: bool = False
+    interval: ProbabilityInterval | None = None
+    effective_sources: float = 0.0
+    stalest_signal_hours: float | None = None
 
     @property
     def logit(self) -> float:
         p = min(max(self.prob, 1e-6), 1 - 1e-6)
         return math.log(p / (1 - p))
+
+    def conservative(self, action: "Action") -> float:
+        if self.interval is None:
+            return self.prob if action in (Action.BUY_YES, Action.SELL_YES) else 1 - self.prob
+        return self.interval.conservative(action)
 
 
 @dataclass
@@ -247,6 +314,47 @@ class Fill:
     @property
     def cost(self) -> float:
         return self.contracts * self.price + self.fees
+
+
+@dataclass
+class Position:
+    """Net exposure in one market, built from the fill ledger."""
+
+    market_key: str
+    subject: str = ""
+    show: str = ""
+    group_id: str = ""
+    round_index: int = 0       # markets can be entered, exited and re-entered
+    yes_open: int = 0
+    no_open: int = 0
+    contracts_bought: int = 0
+    cost: float = 0.0          # everything paid, fees included
+    proceeds: float = 0.0      # everything received from exits, fees deducted
+    fees: float = 0.0          # exchange fees paid on entries and exits
+    first_filled_at: str | None = None
+    last_filled_at: str | None = None
+    entry_vwap: float = 0.0    # average all-in cost of the contracts still open
+
+    @property
+    def open_contracts(self) -> int:
+        return self.yes_open + self.no_open
+
+    @property
+    def open_cost(self) -> float:
+        """Cost basis of the contracts still held."""
+        return self.entry_vwap * self.open_contracts
+
+    @property
+    def action(self) -> Action | None:
+        if self.yes_open > 0:
+            return Action.BUY_YES
+        if self.no_open > 0:
+            return Action.BUY_NO
+        return None
+
+    @property
+    def is_open(self) -> bool:
+        return self.open_contracts > 0
 
 
 @dataclass

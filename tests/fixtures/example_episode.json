@@ -31,7 +31,12 @@
           ]
         ]
       },
-      "close_in_minutes": 600
+      "close_in_minutes": 600,
+      "metadata": {
+        "rules": "This market resolves YES if the named contestant is eliminated during episode 7 of Example Elimination Show as shown in the original broadcast. A voluntary withdrawal, a quit, a disqualification or a medical evacuation shall count as an elimination. If the episode is a non-elimination week, or a double elimination occurs, the market will resolve according to the contestants named as leaving in that broadcast. A postponed episode resolves on the rescheduled broadcast, and a tie is deemed an elimination for each contestant named.",
+        "resolution_source": "Original network broadcast of Example Elimination Show",
+        "status": "open"
+      }
     },
     {
       "market_id": "ELIM-EP7-BRETT",
@@ -63,7 +68,12 @@
           ]
         ]
       },
-      "close_in_minutes": 600
+      "close_in_minutes": 600,
+      "metadata": {
+        "rules": "This market resolves YES if the named contestant is eliminated during episode 7 of Example Elimination Show as shown in the original broadcast. A voluntary withdrawal, a quit, a disqualification or a medical evacuation shall count as an elimination. If the episode is a non-elimination week, or a double elimination occurs, the market will resolve according to the contestants named as leaving in that broadcast. A postponed episode resolves on the rescheduled broadcast, and a tie is deemed an elimination for each contestant named.",
+        "resolution_source": "Original network broadcast of Example Elimination Show",
+        "status": "open"
+      }
     },
     {
       "market_id": "ELIM-EP7-CASS",
@@ -95,7 +105,12 @@
           ]
         ]
       },
-      "close_in_minutes": 600
+      "close_in_minutes": 600,
+      "metadata": {
+        "rules": "This market resolves YES if the named contestant is eliminated during episode 7 of Example Elimination Show as shown in the original broadcast. A voluntary withdrawal, a quit, a disqualification or a medical evacuation shall count as an elimination. If the episode is a non-elimination week, or a double elimination occurs, the market will resolve according to the contestants named as leaving in that broadcast. A postponed episode resolves on the rescheduled broadcast, and a tie is deemed an elimination for each contestant named.",
+        "resolution_source": "Original network broadcast of Example Elimination Show",
+        "status": "open"
+      }
     },
     {
       "market_id": "ELIM-EP7-DEV",
@@ -127,7 +142,12 @@
           ]
         ]
       },
-      "close_in_minutes": 600
+      "close_in_minutes": 600,
+      "metadata": {
+        "rules": "This market resolves YES if the named contestant is eliminated during episode 7 of Example Elimination Show as shown in the original broadcast. A voluntary withdrawal, a quit, a disqualification or a medical evacuation shall count as an elimination. If the episode is a non-elimination week, or a double elimination occurs, the market will resolve according to the contestants named as leaving in that broadcast. A postponed episode resolves on the rescheduled broadcast, and a tie is deemed an elimination for each contestant named.",
+        "resolution_source": "Original network broadcast of Example Elimination Show",
+        "status": "open"
+      }
     }
   ]
 }

@@ -51,10 +51,16 @@ def fee_model_for(venue: str, fees: FeeConfig) -> FeeModel:
 
 
 def side_levels(book: OrderBook, action: Action) -> tuple[BookLevel, ...]:
-    """Levels you must lift, priced in the currency of the side you are buying.
+    """Executable levels for an action, best first, priced in its own currency.
 
-    Buying NO is selling YES into the bid: you pay ``1 - bid`` per contract,
-    and the deepest bid is the cheapest NO.
+    * Buying YES lifts the asks.
+    * Buying NO is selling YES into the bid: you pay ``1 - bid``, so the
+      highest bid is the cheapest NO.
+    * Selling YES hits the bids, and ``price`` is what you receive.
+    * Selling NO is buying YES back from the asks: you receive ``1 - ask``.
+
+    For buys the list ascends (cheapest first); for sells it descends (best
+    proceeds first). ``walk_book`` relies on that ordering.
     """
     if action is Action.BUY_YES:
         return tuple(sorted(book.asks, key=lambda l: l.price))
@@ -63,13 +69,23 @@ def side_levels(book: OrderBook, action: Action) -> tuple[BookLevel, ...]:
             BookLevel(price=round(1 - l.price, 10), size=l.size)
             for l in sorted(book.bids, key=lambda l: -l.price)
         )
+    if action is Action.SELL_YES:
+        return tuple(sorted(book.bids, key=lambda l: -l.price))
+    if action is Action.SELL_NO:
+        return tuple(
+            BookLevel(price=round(1 - l.price, 10), size=l.size)
+            for l in sorted(book.asks, key=lambda l: l.price)
+        )
     return ()
 
 
 def walk_book(
     book: OrderBook, action: Action, contracts: int, limit_price: float | None = None
 ) -> tuple[int, float]:
-    """Fill up to ``contracts`` against the book. Returns (filled, vwap)."""
+    """Fill up to ``contracts`` against the book. Returns (filled, vwap).
+
+    ``limit_price`` is a maximum when buying and a minimum when selling.
+    """
     levels = side_levels(book, action)
     remaining = contracts
     notional = 0.0
@@ -77,7 +93,7 @@ def walk_book(
     for level in levels:
         if remaining <= 0:
             break
-        if limit_price is not None and level.price > limit_price + 1e-12:
+        if limit_price is not None and _outside_limit(action, level.price, limit_price):
             break
         take = min(remaining, level.size)
         notional += take * level.price
@@ -88,16 +104,23 @@ def walk_book(
     return filled, notional / filled
 
 
+def _outside_limit(action: Action, price: float, limit_price: float) -> bool:
+    if action.is_sell:
+        return price < limit_price - 1e-12
+    return price > limit_price + 1e-12
+
+
 def available_depth(book: OrderBook, action: Action, limit_price: float) -> int:
     return sum(
         level.size
         for level in side_levels(book, action)
-        if level.price <= limit_price + 1e-12
+        if not _outside_limit(action, level.price, limit_price)
     )
 
 
 def model_prob_for_side(prob_eliminated: float, action: Action) -> float:
-    return prob_eliminated if action is Action.BUY_YES else 1 - prob_eliminated
+    """Probability that the side being traded settles at $1."""
+    return prob_eliminated if action.side is Side.YES else 1 - prob_eliminated
 
 
 def build_edge(
@@ -109,8 +132,14 @@ def build_edge(
     fee_model: FeeModel,
     safety_margin: float,
     limit_price: float | None = None,
+    side_prob: float | None = None,
 ) -> EdgeBreakdown | None:
-    """Price a candidate trade of ``contracts`` on ``action``. None if unfillable."""
+    """Price a candidate trade of ``contracts`` on ``action``. None if unfillable.
+
+    ``side_prob`` overrides the derived probability of the traded side, which
+    is how the conservative end of an uncertainty interval gets used instead
+    of the point estimate.
+    """
     if action is Action.PASS or contracts <= 0:
         return None
     levels = side_levels(book, action)
@@ -121,7 +150,10 @@ def build_edge(
         return None
     return EdgeBreakdown(
         action=action,
-        model_prob=model_prob_for_side(prob_eliminated, action),
+        model_prob=(
+            side_prob if side_prob is not None
+            else model_prob_for_side(prob_eliminated, action)
+        ),
         top_of_book=levels[0].price,
         vwap=vwap,
         slippage=vwap - levels[0].price,
@@ -131,11 +163,23 @@ def build_edge(
     )
 
 
-def best_action(book: OrderBook, prob_eliminated: float) -> Action:
-    """Which side the model disagrees with the market on, if either."""
+def best_action(
+    book: OrderBook,
+    prob_eliminated: float,
+    yes_prob: float | None = None,
+    no_prob: float | None = None,
+) -> Action:
+    """Which side the model disagrees with the market on, if either.
+
+    ``yes_prob`` / ``no_prob`` let the caller supply the conservative end of
+    its interval for each side separately, which is not symmetric: both are
+    pessimistic, so both gaps can be negative at once and the answer is PASS.
+    """
     ask, bid = book.best_ask, book.best_bid
-    yes_gap = (prob_eliminated - ask) if ask is not None else -math.inf
-    no_gap = ((1 - prob_eliminated) - (1 - bid)) if bid is not None else -math.inf
+    p_yes = prob_eliminated if yes_prob is None else yes_prob
+    p_no = (1 - prob_eliminated) if no_prob is None else no_prob
+    yes_gap = (p_yes - ask) if ask is not None else -math.inf
+    no_gap = (p_no - (1 - bid)) if bid is not None else -math.inf
     if yes_gap <= 0 and no_gap <= 0:
         return Action.PASS
     return Action.BUY_YES if yes_gap >= no_gap else Action.BUY_NO

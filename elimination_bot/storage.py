@@ -12,21 +12,21 @@ import json
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable
 
 from .models import (
+    Action,
     Decision,
     Estimate,
     Fill,
     Market,
     Order,
     Outcome,
+    Position,
     Quote,
     Signal,
     dumps,
-    to_jsonable,
     utcnow,
 )
 
@@ -126,6 +126,16 @@ CREATE TABLE IF NOT EXISTS outcomes (
     eliminated INTEGER NOT NULL,
     settled_at TEXT NOT NULL,
     note TEXT
+);
+CREATE TABLE IF NOT EXISTS verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id TEXT,
+    market_key TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    episode TEXT,
+    resolution_source TEXT,
+    issues TEXT NOT NULL,
+    checked_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS source_scores (
     source_id TEXT PRIMARY KEY,
@@ -315,6 +325,18 @@ class AuditLog:
         )
         self.conn.commit()
 
+    def record_verification(self, verification, cycle_id: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO verifications (cycle_id, market_key, ok, episode,"
+            " resolution_source, issues, checked_at) VALUES (?,?,?,?,?,?,?)",
+            (
+                cycle_id, verification.market_key, int(verification.ok),
+                verification.episode, verification.resolution_source,
+                json.dumps(verification.issues), utcnow().isoformat(),
+            ),
+        )
+        self.conn.commit()
+
     def record_funding_event(
         self, kind: str, amount: float | None, reserve_after: float | None, note: str = ""
     ) -> None:
@@ -340,6 +362,16 @@ class AuditLog:
 
     # ----------------------------------------------------------------- reads
 
+    def entry_model_prob(self, market_key: str) -> float | None:
+        """The probability that justified opening this position."""
+        row = self.conn.execute(
+            "SELECT model_prob FROM decisions WHERE market_key=?"
+            " AND action IN ('buy_yes','buy_no') AND model_prob IS NOT NULL"
+            " ORDER BY id LIMIT 1",
+            (market_key,),
+        ).fetchone()
+        return float(row["model_prob"]) if row else None
+
     def source_scores(self) -> dict[str, dict[str, float]]:
         rows = self.conn.execute("SELECT * FROM source_scores").fetchall()
         out: dict[str, dict[str, float]] = {}
@@ -359,62 +391,150 @@ class AuditLog:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def open_positions(self) -> dict[str, dict[str, Any]]:
-        """Net filled position per market, keyed by market, with cost basis."""
+    def rounds(self) -> list[Position]:
+        """Every round of exposure, in order, one per market entry-to-flat.
+
+        A market can be entered, exited and entered again. Each of those is a
+        separate opportunity with its own cost basis, so the ledger closes a
+        round the moment the position goes flat rather than blending the next
+        entry into the last one's average price.
+        """
         rows = self.conn.execute(
-            "SELECT f.market_key, o.action, SUM(f.contracts) AS contracts,"
-            " SUM(f.contracts * f.price + f.fees) AS cost"
+            "SELECT f.market_key, f.contracts, f.price, f.fees, f.filled_at,"
+            " o.action, m.show, m.subject, m.group_id"
             " FROM fills f JOIN orders o ON o.order_id = f.order_id"
-            " LEFT JOIN outcomes s ON s.market_key = f.market_key"
-            " WHERE s.market_key IS NULL"
-            " GROUP BY f.market_key, o.action",
-            (),
+            " LEFT JOIN markets m ON m.market_key = f.market_key"
+            " ORDER BY f.filled_at, f.id"
         ).fetchall()
-        out: dict[str, dict[str, Any]] = {}
+
+        completed: list[Position] = []
+        current: dict[str, Position] = {}
+        counts: dict[str, int] = {}
+
         for row in rows:
-            entry = out.setdefault(row["market_key"], {"contracts": 0, "cost": 0.0, "legs": {}})
-            entry["contracts"] += row["contracts"]
-            entry["cost"] += row["cost"]
-            entry["legs"][row["action"]] = row["contracts"]
+            key = row["market_key"]
+            position = current.get(key)
+            if position is None:
+                position = Position(
+                    market_key=key,
+                    subject=row["subject"] or "",
+                    show=row["show"] or "",
+                    group_id=row["group_id"] or "",
+                    round_index=counts.get(key, 0),
+                    first_filled_at=row["filled_at"],
+                )
+                current[key] = position
+            position.last_filled_at = row["filled_at"]
+            position.fees += row["fees"]
+            action = Action(row["action"])
+            contracts = int(row["contracts"])
+            if action.is_buy:
+                if action is Action.BUY_YES:
+                    position.yes_open += contracts
+                else:
+                    position.no_open += contracts
+                position.contracts_bought += contracts
+                position.cost += contracts * row["price"] + row["fees"]
+            else:
+                if action is Action.SELL_YES:
+                    position.yes_open -= contracts
+                else:
+                    position.no_open -= contracts
+                position.proceeds += contracts * row["price"] - row["fees"]
+
+            position.entry_vwap = (
+                position.cost / position.contracts_bought
+                if position.contracts_bought
+                else 0.0
+            )
+            if position.contracts_bought and not position.is_open:
+                completed.append(position)
+                counts[key] = position.round_index + 1
+                del current[key]
+
+        return completed + [p for p in current.values() if p.contracts_bought]
+
+    def ledger(self) -> dict[str, Position]:
+        """The current open round per market, keyed by market."""
+        return {p.market_key: p for p in self.rounds() if p.is_open}
+
+    def open_positions(self) -> dict[str, dict[str, Any]]:
+        """Unsettled markets where contracts are still held."""
+        settled = {
+            row["market_key"]
+            for row in self.conn.execute("SELECT market_key FROM outcomes")
+        }
+        out: dict[str, dict[str, Any]] = {}
+        for key, position in self.ledger().items():
+            if key in settled or not position.is_open:
+                continue
+            out[key] = {
+                "contracts": position.open_contracts,
+                "cost": position.open_cost,
+                "legs": {
+                    "buy_yes": position.yes_open,
+                    "buy_no": position.no_open,
+                },
+                "entry_vwap": position.entry_vwap,
+                "position": position,
+            }
         return out
 
     def settled_trades(self) -> list[dict[str, Any]]:
-        """Every filled trade that has a settled outcome, with realized PnL."""
-        rows = self.conn.execute(
-            "SELECT f.market_key, f.contracts, f.price, f.fees, f.filled_at,"
-            " o.action, o.cycle_id, m.show, m.group_id, m.subject,"
-            " s.eliminated, d.model_prob, d.market_prob, d.net_edge"
-            " FROM fills f"
-            " JOIN orders o ON o.order_id = f.order_id"
-            " JOIN outcomes s ON s.market_key = f.market_key"
-            " LEFT JOIN markets m ON m.market_key = f.market_key"
-            " LEFT JOIN decisions d ON d.cycle_id = o.cycle_id"
-            "   AND d.market_key = f.market_key"
-            " ORDER BY f.filled_at"
-        ).fetchall()
-        trades = []
-        for row in rows:
-            won = bool(row["eliminated"]) if row["action"] == "buy_yes" else not bool(row["eliminated"])
-            payout = float(row["contracts"]) if won else 0.0
-            cost = row["contracts"] * row["price"] + row["fees"]
+        """One row per completed market position — the unit of independence.
+
+        A position counts as complete when the market has settled or when
+        every contract has been sold back. Realized PnL is
+        ``proceeds + settlement payout - cost``, so a position exited early
+        is graded on what it actually earned, not on how the episode ended.
+        """
+        outcomes = {
+            row["market_key"]: bool(row["eliminated"])
+            for row in self.conn.execute("SELECT market_key, eliminated FROM outcomes")
+        }
+        decisions = {
+            row["market_key"]: row
+            for row in self.conn.execute(
+                "SELECT market_key, model_prob, market_prob, net_edge FROM decisions"
+                " WHERE action IN ('buy_yes','buy_no') ORDER BY id"
+            )
+        }
+
+        trades: list[dict[str, Any]] = []
+        for position in self.rounds():
+            key = position.market_key
+            eliminated = outcomes.get(key)
+            if eliminated is None and position.is_open:
+                continue  # still live: not yet a graded opportunity
+            payout = 0.0
+            if eliminated is not None:
+                payout = position.yes_open * (1.0 if eliminated else 0.0)
+                payout += position.no_open * (0.0 if eliminated else 1.0)
+            pnl = position.proceeds + payout - position.cost
+            decision = decisions.get(key)
             trades.append(
                 {
-                    "market_key": row["market_key"],
-                    "show": row["show"],
-                    "group_id": row["group_id"],
-                    "subject": row["subject"],
-                    "action": row["action"],
-                    "contracts": row["contracts"],
-                    "price": row["price"],
-                    "fees": row["fees"],
-                    "filled_at": row["filled_at"],
-                    "won": won,
-                    "pnl": payout - cost,
-                    "model_prob": row["model_prob"],
-                    "market_prob": row["market_prob"],
-                    "net_edge": row["net_edge"],
+                    "market_key": key,
+                    "round": position.round_index,
+                    "show": position.show,
+                    "group_id": position.group_id,
+                    "subject": position.subject,
+                    "action": (position.action.value if position.action else "closed"),
+                    "contracts": position.contracts_bought,
+                    "price": position.entry_vwap,
+                    "fees": position.fees,
+                    "filled_at": position.first_filled_at,
+                    "closed_at": position.last_filled_at,
+                    "exited_early": not position.is_open and eliminated is None,
+                    "settled": eliminated is not None,
+                    "won": pnl > 0,
+                    "pnl": pnl,
+                    "model_prob": decision["model_prob"] if decision else None,
+                    "market_prob": decision["market_prob"] if decision else None,
+                    "net_edge": decision["net_edge"] if decision else None,
                 }
             )
+        trades.sort(key=lambda t: t["filled_at"] or "")
         return trades
 
     def graded_estimates(self) -> list[dict[str, Any]]:

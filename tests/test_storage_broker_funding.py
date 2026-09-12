@@ -60,6 +60,8 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(len(trades), 1)
         self.assertTrue(trades[0]["won"])
         self.assertAlmostEqual(trades[0]["pnl"], 60 - (60 * 0.34) - trades[0]["fees"])
+        self.assertEqual(trades[0]["contracts"], 60)
+        self.assertTrue(trades[0]["settled"])
 
     def test_losing_trade_loses_the_whole_stake(self):
         broker = PaperBroker(log=self.log, fee_model=FeeModel(), haircut=0.0)
