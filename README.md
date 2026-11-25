@@ -1,42 +1,26 @@
 # Morning Market Briefing
 
-Runs every weekday at 10:09 AM ET via GitHub Actions. Fetches market news and price movers using the Anthropic API (web search), then emails a formatted briefing to Sanjayja@gmail.com.
+An automated pre-market newsletter. Every weekday morning a GitHub Action uses the Anthropic API (Claude with web search) to gather overnight market news, index and yield moves, and notable price movers, then emails a formatted briefing.
+
+Each briefing is also saved as Markdown in [`DailyBriefings/`](DailyBriefings/), so the folder doubles as a running archive.
+
+## How it works
+
+1. A scheduled GitHub Actions workflow runs Mon–Fri at 10:09 AM ET (14:09 UTC).
+2. Claude searches the web and writes the briefing.
+3. The briefing is emailed through Gmail and committed to `DailyBriefings/`.
 
 ## Setup
 
-### 1. Create a GitHub repository
+1. Fork or clone this repo.
+2. In **Settings → Secrets and variables → Actions**, add:
 
-Go to https://github.com/new, create a **private** repository named `morning-market-briefing`.
-
-### 2. Add GitHub Secrets
-
-In your new repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add these three:
-
-| Secret name | Value |
+| Secret | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `GMAIL_SENDER` | Your Gmail address (e.g. you@gmail.com) |
-| `GMAIL_APP_PASSWORD` | Your Gmail App Password (not your regular password) |
+| `GMAIL_SENDER` | The Gmail address that sends the briefing |
+| `GMAIL_APP_PASSWORD` | A Gmail app password (Google Account → Security → 2-Step Verification → App passwords) |
 
-> To create a Gmail App Password: Google Account → Security → 2-Step Verification → App passwords
+3. Open the **Actions** tab, choose **Morning Market Briefing**, and click **Run workflow** to test.
 
-### 3. Push this repo
-
-```bash
-cd C:\Users\Sjain\Documents\morning-market-briefing
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/YOUR_USERNAME/morning-market-briefing.git
-git push -u origin main
-```
-
-### 4. Verify
-
-- Go to your repo → **Actions** tab
-- Click **Morning Market Briefing** → **Run workflow** to test immediately
-- Check your inbox within ~5 minutes
-
-## Schedule
-
-Runs automatically Mon–Fri at 10:09 AM ET (14:09 UTC). Adjust the cron in `.github/workflows/morning-briefing.yml` if needed.
+To change the time, edit the cron line in `.github/workflows/morning-briefing.yml`.
